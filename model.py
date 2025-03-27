@@ -9,7 +9,7 @@ import torch.nn.functional as F
 from speechbrain.lobes.models.transformer.Transformer import PositionalEncoding
 from cached_convnet import CachedConvNet
 
-
+#입력 길이를 chunk_size 배수로 맞추고, 필요한 패딩을 적용하는 함수
 def mod_pad(x, chunk_size, pad):
     # Mod pad the input to perform integer number of
     # inferences
@@ -22,7 +22,7 @@ def mod_pad(x, chunk_size, pad):
 
     return x, mod
 
-
+#[B, C, T] 형식의 데이터를 LayerNorm 처리하기 위해 순서를 바꿨다가 다시 되돌리는 LayerNorm 래퍼
 class LayerNormPermuted(nn.LayerNorm):
     def __init__(self, *args, **kwargs):
         super(LayerNormPermuted, self).__init__(*args, **kwargs)
@@ -37,7 +37,7 @@ class LayerNormPermuted(nn.LayerNorm):
         x = x.permute(0, 2, 1)  # [B, C, T]
         return x
 
-
+#Depthwise + Pointwise Conv 레이어 -> 경량화된 CNN 구조로, 채널 수를 줄이거나 늘릴 때 사용됨
 class DepthwiseSeparableConv(nn.Module):
     """
     Depthwise separable convolutions
@@ -61,7 +61,8 @@ class DepthwiseSeparableConv(nn.Module):
     def forward(self, x):
         return self.layers(x)
 
-
+#인코더
+#딜레이를 고려한 인코더로 딜레이를 점차 늘리며 과거 정보를 점점 더 많이 반영
 class DilatedCausalConvEncoder(nn.Module):
     """
     A dilated causal convolution based encoder for encoding
@@ -95,6 +96,7 @@ class DilatedCausalConvEncoder(nn.Module):
             _dcc_layers.update({'dcc_%d' % i: dcc_layer})
         self.dcc_layers = nn.Sequential(_dcc_layers)
 
+    #각 레이어별 context buffer 초기화
     def init_ctx_buf(self, batch_size, device):
         """
         Returns an initialized context buffer for a given batch size.
@@ -103,7 +105,8 @@ class DilatedCausalConvEncoder(nn.Module):
             (batch_size, self.channels,
              (self.kernel_size - 1) * (2**self.num_layers - 1)),
             device=device)
-
+    
+    #입력 x와 이전 context를 바탕으로 인코딩 결과와 새로운 context buffer 반환
     def forward(self, x, ctx_buf):
         """
         Encodes input audio `x` into latent space, and aggregates
@@ -139,7 +142,8 @@ class DilatedCausalConvEncoder(nn.Module):
 
         return x, ctx_buf
 
-
+#디코더 (Transformer 기반)
+#마지막 토큰만 사용하는 causal attention 구조
 class CausalTransformerDecoderLayer(torch.nn.TransformerDecoderLayer):
     """
     Adapted from:
@@ -148,6 +152,7 @@ class CausalTransformerDecoderLayer(torch.nn.TransformerDecoderLayer):
     "causal_transformer_decoder/model.py#L77"
     """
 
+    #Self-attn → Cross-attn → FFN 과정을 수행
     def forward(
         self,
         tgt: Tensor,
@@ -187,7 +192,8 @@ class CausalTransformerDecoderLayer(torch.nn.TransformerDecoderLayer):
         tgt_last_tok = self.norm3(tgt_last_tok)
         return tgt_last_tok, sa_map, ca_map
 
-
+#위 layer들을 쌓은 디코더
+#지정된 길이만큼의 과거 정보 (ctx_len)를 고려하여 chunk 단위로 decoding
 class CausalTransformerDecoder(nn.Module):
     """
     A casual transformer decoder which decodes input vectors using
@@ -210,12 +216,14 @@ class CausalTransformerDecoder(nn.Module):
         self.tf_dec_layers = nn.ModuleList([CausalTransformerDecoderLayer(
             d_model=model_dim, nhead=nhead, dim_feedforward=ff_dim,
             batch_first=True, dropout=dropout) for _ in range(num_layers)])
-
+        
+    #디코더용 context buffer 초기화
     def init_ctx_buf(self, batch_size, device):
         return torch.zeros(
             (batch_size, self.num_layers + 1, self.ctx_len, self.model_dim),
             device=device)
-
+    
+    #입력을 과거 정보와 함께 unfold하여 chunk 단위로 구성
     def _causal_unfold(self, x):
         """
         Unfolds the sequence into a batch of sequences
@@ -235,7 +243,8 @@ class CausalTransformerDecoder(nn.Module):
         x = x.reshape(-1, C, self.ctx_len + self.chunk_size)
         x = x.permute(0, 2, 1)
         return x
-
+    
+    #디코더 전체 흐름. label과 audio의 상호 attention을 계산하여 마스크 생성용 latent vector 반환
     def forward(self, tgt, mem, ctx_buf, probe=False):
         """
         Args:
@@ -285,7 +294,8 @@ class CausalTransformerDecoder(nn.Module):
 
         return tgt, ctx_buf
 
-
+#인코더-디코더 구조 기반 마스크 생성기
+#입력 오디오 + 라벨을 인코딩하고, Transformer 디코더로 마스크를 생성
 class MaskNet(nn.Module):
     def __init__(self, enc_dim, num_enc_layers, dec_dim, dec_buf_len,
                  dec_chunk_size, num_dec_layers, use_pos_enc, skip_connection, proj, decoder_dropout):
@@ -318,7 +328,8 @@ class MaskNet(nn.Module):
             model_dim=dec_dim, ctx_len=dec_buf_len, chunk_size=dec_chunk_size,
             num_layers=num_dec_layers, nhead=8, use_pos_enc=use_pos_enc,
             ff_dim=2 * dec_dim, dropout=decoder_dropout)
-
+        
+    #인코딩 → 라벨 통합 → 디코딩 → 마스크 반환
     def forward(self, x, l, enc_buf, dec_buf):
         """
         Generates a mask based on encoded input `e` and the one-hot
@@ -358,7 +369,8 @@ class MaskNet(nn.Module):
 
         return m, enc_buf, dec_buf
 
-
+#전체 모델을 구성하는 main 클래스
+#입력 오디오 → 전처리 Conv → 라벨 인코딩 → 마스크 생성 → 마스크 적용 → ConvTranspose로 최종 음성 복원
 class Net(nn.Module):
     def __init__(self, label_len, L=8,
                  enc_dim=512, num_enc_layers=10,
@@ -413,14 +425,16 @@ class Net(nn.Module):
                 stride=L,
                 padding=out_buf_len * L, bias=False),
             nn.Tanh())
-
+        
+    #context buffer 초기화
     def init_buffers(self, batch_size, device):
         enc_buf = self.mask_gen.encoder.init_ctx_buf(batch_size, device)
         dec_buf = self.mask_gen.decoder.init_ctx_buf(batch_size, device)
         out_buf = torch.zeros(batch_size, self.enc_dim, self.out_buf_len,
                               device=device)
         return enc_buf, dec_buf, out_buf
-
+    
+    #전체 모델의 흐름 처리. 추론 시 또는 실시간 스트리밍에도 대응 가능
     def forward(self, x, init_enc_buf=None, init_dec_buf=None,
                 init_out_buf=None, convnet_pre_ctx=None, pad=True):
         """
