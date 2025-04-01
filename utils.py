@@ -1,4 +1,4 @@
-"""A collection of useful helper functions"""
+#A collection of useful helper functions
 #오디오 신호 처리와 모델 학습 과정을 보조하는 기능 모아놓은 코드
 
 import os                   # OS(운영체제)와의 상호작용을 위한 표준 라이브러리
