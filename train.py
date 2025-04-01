@@ -20,7 +20,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 import utils
 import fairseq
 
-#분산 학습에서 마스터 프로세스(master process) 가 동작하는 주소를 지정
+#분산 학습에서 마스터 프로세스(master process) 가 동작하는 주소를 지정//
 os.environ['MASTER_ADDR'] = 'localhost'
 #마스터 프로세스가 통신할 때 사용할 포트 번호를 지정
 os.environ['MASTER_PORT'] = '12355'
