@@ -17,6 +17,7 @@ def load_model(checkpoint_path, config_path):
     model.load_state_dict(torch.load(
         checkpoint_path, map_location="cpu")['model'])
     return model, config['data']['sr']
+##fff
 
 
 def load_audio(audio_path, sample_rate):
