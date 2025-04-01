@@ -1,4 +1,4 @@
-# 실제 vs. 생성 음성 구분하기 위한 여러 종류의 판별기(1D/2D, 다양한 주기)와 손실 함수를 정의
+#실제 vs. 생성 음성 구분하기 위한 여러 종류의 판별기(1D/2D, 다양한 주기)와 손실 함수를 정의함
 #DiscriminatorS(일반 1D Conv), DiscriminatorP(주기 기반 2D Conv), MultiPeriodDiscriminator(여러 주기)
 #음성 퀄리티와 자연스러움을 높이는 데 핵심적인 역할
 
