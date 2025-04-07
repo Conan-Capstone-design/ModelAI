@@ -7,7 +7,7 @@ import torch
 from scipy.io.wavfile import read
 import os
 import glob
-
+import re
 
 def get_dataset(dir):
     original_files = glob.glob(os.path.join(dir, "*_original.wav"))
@@ -78,4 +78,9 @@ class LLVCDataset(torch.utils.data.Dataset):
         else:
             converted = converted[:, : self.wav_len]
 
-        return converted, gt
+        #임의로 파일 이름에 따라 타겟 인덱스 지정해줌
+        filename = os.path.basename(self.original_files[idx])
+        match = re.search(r"speaker(\d+)_", filename)
+        target_index = int(match.group(1)) if match else 0
+
+        return converted, gt, target_index
