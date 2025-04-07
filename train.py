@@ -31,13 +31,15 @@ def net_g_step(batch, net_g, device, fp16_run):
     # 배치 데이터를 받아 모델 net_g에 통과시키는 forward 연산을 수행하는 함수
     # fp16_run이 True이면 자동 mixed precision(autocast) 모드로 실행됨
 
-    og, gt = batch  # batch에서 입력(og)과 정답(gt)을 분리
+    og, gt, target_index = batch  # batch에서 입력(og)과 정답(gt)을 분리
 
     og = og.to(device=device, non_blocking=True)  # 입력 데이터를 지정한 디바이스(GPU 또는 CPU)로 비동기 전송
     gt = gt.to(device=device, non_blocking=True)  # 정답 데이터도 동일하게 디바이스로 전송
+    target_index = target_index.to(device=device)
 
+    #output에 타겟 인덱스도 함께 넘겨주기
     with autocast(enabled=fp16_run):  # fp16_run이 True이면 float16 혼합 정밀도로 연산 수행
-        output = net_g(og)  # 모델 net_g에 입력 og를 넣어 출력값 계산
+        output = net_g(og, target_index=target_index)  # 모델 net_g에 입력 og를 넣어 출력값 계산
 
     return output, gt, og  # 출력 결과, 정답, 입력 데이터를 함께 반환
 

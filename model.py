@@ -22,10 +22,10 @@ def mod_pad(x, chunk_size, pad):
     if (x.shape[-1] % chunk_size) != 0:
         # 부족한 만큼 mod에 저장 (chunk_size - 나머지)
         mod = chunk_size - (x.shape[-1] % chunk_size)
-
-    # 오른쪽 끝에 mod만큼 0으로 패딩 (chunk_size 배수로 맞춤)
+    #참고로 pad(x,(a,b))에서 a는 왼쪽, b는 오른쪽
+    # 오른쪽 끝에 mod만큼 0으로 패딩 (chunk_size 배수로 맞춤) 이떄, F.pad()는 기본적으로 padding 값을 0으로 채움
     x = F.pad(x, (0, mod))
-    # 지정된 pad만큼 앞뒤로 추가 패딩 적용
+    # 지정된 pad(입력값으로 주어지는)만큼 앞뒤로 추가 패딩 적용
     x = F.pad(x, pad)
 
     # 패딩된 텐서와 추가된 mod 값을 반환
@@ -40,7 +40,7 @@ class LayerNormPermuted(nn.LayerNorm):
     def forward(self, x):
         """
         Args:
-            x: [B, C, T] 형식의 입력 텐서
+            x: [B, C, T] 형식의 입력 텐서 -> 참고로 B:배치, C: 채널 수, T: 시간 길이
         """
         x = x.permute(0, 2, 1)  # [B, C, T] → [B, T, C]로 순서 변경 (LayerNorm이 마지막 차원에 적용되도록)
         x = super().forward(x)  # nn.LayerNorm의 forward 호출하여 정규화 수행
@@ -90,7 +90,7 @@ class DilatedCausalConvEncoder(nn.Module):
         self.num_layers = num_layers  # 레이어 개수 저장
         self.kernel_size = kernel_size  # 커널 크기 저장
 
-        # 각 레이어별 버퍼 길이 계산: (커널 크기 - 1) * dilation
+        # 각 레이어별 버퍼 길이 계산: (커널 크기 - 1) * dilation(팽창)
         # dilation은 2^i로 증가 → 과거 정보를 점점 더 넓게 보는 구조
         self.buf_lengths = [(kernel_size - 1) * 2**i
                             for i in range(num_layers)]
@@ -102,7 +102,7 @@ class DilatedCausalConvEncoder(nn.Module):
             self.buf_indices.append(
                 self.buf_indices[-1] + self.buf_lengths[i])
 
-        # Dilated causal conv 레이어들을 정의
+        # Dilated causal conv 레이어들을 정의(딕셔너리로 사용)
         # dilation을 늘려가며 점점 더 넓은 과거 정보를 반영하도록 설계
         _dcc_layers = OrderedDict()
         for i in range(num_layers):
@@ -110,13 +110,13 @@ class DilatedCausalConvEncoder(nn.Module):
             dcc_layer = DepthwiseSeparableConv(
                 channels, channels, kernel_size=3, stride=1,
                 padding=0, dilation=2**i)  # dilation은 1, 2, 4, 8, ... 식으로 증가
-            # 'dcc_0', 'dcc_1', ... 이름으로 layer 등록
+            # 'dcc_0', 'dcc_1', ... 이름으로 layer 등록 {'dcc_0': dcc_layer} 이런식으로 하나씩 저장
             _dcc_layers.update({'dcc_%d' % i: dcc_layer})
         
         # Sequential로 묶어서 하나의 모듈로 저장
         self.dcc_layers = nn.Sequential(_dcc_layers)
 
-    # 각 레이어별 context buffer 초기화
+    # 각 레이어별 context buffer 초기화(이전에 본 정보들)
     def init_ctx_buf(self, batch_size, device):
         """
         Returns an initialized context buffer for a given batch size.
@@ -144,7 +144,7 @@ class DilatedCausalConvEncoder(nn.Module):
             dcc_in = torch.cat(
                 (ctx_buf[..., buf_start_idx:buf_end_idx], x), dim=-1)
 
-            # context buffer 업데이트: 최근 입력으로 해당 구간을 덮어씀
+            # context buffer 업데이트: 최근 입력(dcc_in)으로 해당 구간(ctx_buf)을 덮어씀(참고로 \이거 걍 줄바꿈임)
             ctx_buf[..., buf_start_idx:buf_end_idx] = \
                 dcc_in[..., -self.buf_lengths[i]:]
 
@@ -201,7 +201,7 @@ class CausalTransformerDecoderLayer(torch.nn.TransformerDecoderLayer):
         tmp_tgt = self.linear2(
             self.dropout(self.activation(self.linear1(tgt_last_tok)))  # FFN
         )
-        # residual connection + dropout + layer norm
+        # residual connection + dropout + layer norm (이걸 총 3번 하는듯)
         tgt_last_tok = tgt_last_tok + self.dropout3(tmp_tgt)
         tgt_last_tok = self.norm3(tgt_last_tok)
 
@@ -231,7 +231,7 @@ class CausalTransformerDecoder(nn.Module):
         # unfold 연산을 위한 설정: 과거 + 현재 chunk 길이 만큼 sliding window
         self.unfold = nn.Unfold(kernel_size=(ctx_len + chunk_size, 1), stride=chunk_size)
 
-        # Positional encoding: 위치 정보 제공
+        # Positional encoding: 위치 정보 제공 (모델에게 순서를 알려주는 장치 -> "입력의 순서")
         self.pos_enc = PositionalEncoding(model_dim, max_len=200)
 
         # Transformer 디코더 레이어들 쌓기
@@ -262,7 +262,7 @@ class CausalTransformerDecoder(nn.Module):
         x = x.permute(0, 2, 1)                      # [B, C, T]
         x = self.unfold(x.unsqueeze(-1))            # [B, C*(ctx_len+chunk), L]
         x = x.permute(0, 2, 1)                      # [B, L, C*(ctx_len+chunk)]
-        x = x.reshape(B, -1, C, self.ctx_len + self.chunk_size)
+        x = x.reshape(B, -1, C, self.ctx_len + self.chunk_size) #unfold로 만든 데이터를 다시 [batch, chunk 수, 채널, chunk 길이]로 정리
         x = x.reshape(-1, C, self.ctx_len + self.chunk_size)  # [B*L, C, ctx+chunk]
         x = x.permute(0, 2, 1)                      # [B*L, ctx+chunk, C]
         return x
@@ -408,8 +408,9 @@ class MaskNet(nn.Module):
 
 #전체 모델을 구성하는 main 클래스
 #입력 오디오 → 전처리 Conv → 라벨 인코딩 → 마스크 생성 → 마스크 적용 → ConvTranspose로 최종 음성 복원
+#labe_num 필요가 없어지고 num_speakers로 바꿈
 class Net(nn.Module):
-    def __init__(self, label_len, L=8,
+    def __init__(self, num_speakers, L=8,
                  enc_dim=512, num_enc_layers=10,
                  dec_dim=256, dec_buf_len=100, num_dec_layers=2,
                  dec_chunk_size=72, out_buf_len=2,
@@ -448,14 +449,22 @@ class Net(nn.Module):
                 bias=False),  # bias 사용 안 함
             nn.ReLU())  # ReLU 활성화 함수 적용
 
-        # 라벨 임베딩 층: 1차원 라벨을 enc_dim 차원으로 변환
-        label_len = 1  # 라벨 길이는 1로 고정
+        # 라벨 임베딩 층: 1차원 라벨을 enc_dim 차원으로 변환 -> 기존에 이 부분이 라벨 1개만 입력
+        # label_len = 1  # 라벨 길이는 1로 고정
+        # self.label_embedding = nn.Sequential(
+        #     nn.Linear(label_len, 512),  # 1 → 512 차원
+        #     nn.LayerNorm(512),  # 정규화
+        #     nn.ReLU(),
+        #     nn.Linear(512, enc_dim),  # 512 → enc_dim
+        #     nn.LayerNorm(enc_dim),  # 정규화
+        #     nn.ReLU())
+
         self.label_embedding = nn.Sequential(
-            nn.Linear(label_len, 512),  # 1 → 512 차원
-            nn.LayerNorm(512),  # 정규화
+            nn.Linear(num_speakers, 512),
+            nn.LayerNorm(512),
             nn.ReLU(),
-            nn.Linear(512, enc_dim),  # 512 → enc_dim
-            nn.LayerNorm(enc_dim),  # 정규화
+            nn.Linear(512, enc_dim),
+            nn.LayerNorm(enc_dim),
             nn.ReLU())
 
         # 마스크 생성기 초기화 (Dilated Encoder + Transformer Decoder 포함)
@@ -495,14 +504,15 @@ class Net(nn.Module):
 
     
     # 전체 모델의 흐름 처리. 추론 시 또는 실시간 스트리밍에도 대응 가능
-    def forward(self, x, init_enc_buf=None, init_dec_buf=None,
+    def forward(self, x, target_index, init_enc_buf=None, init_dec_buf=None,
                 init_out_buf=None, convnet_pre_ctx=None, pad=True):
         """
         Extracts the audio corresponding to the `label` in the given
         `mixture`. Generates `chunk_size` samples per iteration.
         """
 
-        label = torch.zeros(x.shape[0], 1, device=x.device)  # 라벨은 현재 모두 0으로 설정된 one-hot 벡터 생성
+        # label = torch.zeros(x.shape[0], 1, device=x.device)  # 라벨은 현재 모두 0으로 설정된 one-hot 벡터 생성
+        label = F.one_hot(torch.tensor([target_index]), num_classes=3).float().to(x.device)  # [1, 3]
         mod = 0  # 패딩 여부와 길이를 추적하기 위한 변수
 
         if pad:

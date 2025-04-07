@@ -6,8 +6,8 @@ import os # 운영체제(OS)와 상호작용할 수 있도록 도와주는 기�
 import torch # PyTorch 라이브러리를 가져오는 코드
 from scipy.io.wavfile import read # WAV 파일을 읽기 위한 라이브러리
 import os
+import re
 import glob # 파일 패턴 매칭을 위한 라이브러리
-
 
 def get_dataset(dir): # 주어진 디렉토리에서 '_original.wav' 파일과 대응하는 '_converted.wav' 파일을 찾는 함수
     original_files = glob.glob(os.path.join(dir, "*_original.wav")) # '_original.wav' 파일 목록을 가져옴
@@ -78,4 +78,9 @@ class LLVCDataset(torch.utils.data.Dataset): # 음성 데이터를 로드하는 
         else: # `wav_len`보다 길면 잘라내기
             converted = converted[:, : self.wav_len]
 
-        return converted, gt  # 변환된 데이터와 정답 데이터 반환
+        #임의로 파일 이름에 따라 타겟 인덱스 지정해줌
+        filename = os.path.basename(self.original_files[idx])
+        match = re.search(r"speaker(\d+)_", filename)
+        target_index = int(match.group(1)) if match else 0
+
+        return converted, gt, target_index
