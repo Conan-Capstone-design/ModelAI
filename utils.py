@@ -11,6 +11,10 @@ import numpy as np          # 수치 계산을 위한 라이브러리
 import torch.nn.functional as F        # PyTorch의 함수형 API(손실 함수, activation)
 from torchaudio.transforms import MFCC  # torchaudio에서 제공하는 MFCC 변환 클래스를 임포트(음성 특징 추출)
 from mel_processing import mel_spectrogram_torch    # mel 스펙트로그램 생성에 사용되는 함수
+import argparse
+import torch.serialization
+
+torch.serialization.add_safe_globals([argparse.Namespace]) #이거 추가해야됨. 안그러면 py 보안정책 오류 남
 
 
 class Params():
@@ -71,7 +75,7 @@ def load_checkpoint(checkpoint_path, model, optimizer=None, load_opt=True):
     # 체크포인트 파일이 실제 존재하는지 검증
     assert os.path.isfile(
         checkpoint_path), f"Checkpoint '{checkpoint_path}' not found"
-    checkpoint_dict = torch.load(checkpoint_path, map_location="cpu")       #체크포인트 파일을 로딩, CPU 메모리에 로드 가능
+    checkpoint_dict = torch.load(checkpoint_path, map_location="cpu", weights_only=False)       #체크포인트 파일을 로딩, CPU 메모리에 로드 가능(false 추가 안하면 py에서 보안 문제로 막아버림)
 
     #모델이 DataParallel 형태로 model.module을 감싸고 있으면
     if hasattr(model, "module"):        #내부의 실제 모델(model.module)에 상태를 로드
