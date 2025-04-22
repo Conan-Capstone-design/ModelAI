@@ -512,7 +512,7 @@ class Net(nn.Module):
         """
 
         # label = torch.zeros(x.shape[0], 1, device=x.device)  # 라벨은 현재 모두 0으로 설정된 one-hot 벡터 생성
-        label = F.one_hot(torch.tensor([target_index]), num_classes=3).float().to(x.device)  # [1, 3]
+        label = F.one_hot(target_index, num_classes=3).float().to(x.device)  # [1, 3]
         mod = 0  # 패딩 여부와 길이를 추적하기 위한 변수
 
         if pad:

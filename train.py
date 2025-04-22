@@ -19,6 +19,12 @@ from model import Net
 from torch.nn.parallel import DistributedDataParallel as DDP
 import utils
 import fairseq
+import argparse
+from fairseq.data.dictionary import Dictionary
+import torch.serialization
+
+torch.serialization.add_safe_globals([Dictionary]) #py보안 정책땜에 필요
+
 
 #분산 학습에서 마스터 프로세스(master process) 가 동작하는 주소를 지정//
 os.environ['MASTER_ADDR'] = 'localhost'
@@ -59,16 +65,19 @@ def training_runner(rank, world_size, config, training_dir):
         os.makedirs(checkpoint_dir, exist_ok=True)  # 체크포인트 디렉토리 생성
         writer = SummaryWriter(log_dir=log_dir)  # TensorBoard 로그 기록기 초기화
 
-    dist.init_process_group(
-        backend="gloo", init_method="env://", rank=rank, world_size=world_size
-    )  # PyTorch 분산 학습 프로세스 그룹 초기화 (환경변수 방식 사용)
+    # dist.init_process_group(
+    #     backend="gloo", init_method="env://", rank=rank, world_size=world_size
+    # )  # PyTorch 분산 학습 프로세스 그룹 초기화 (환경변수 방식 사용)
+
+    if world_size > 1:
+        dist.init_process_group(backend="gloo", init_method="env://", rank=rank, world_size=world_size)
 
     if is_multi_process:
         torch.cuda.set_device(rank)  # rank에 해당하는 GPU 사용 설정
 
     torch.manual_seed(config['seed'])  # 랜덤 시드 고정
 
-    data_train = Dataset(**config['data'], dset='train')  # 학습용 데이터셋 생성
+    data_train = Dataset(**config['data'], dset='짱구')  # 학습용 데이터셋 생성
     data_val = Dataset(**config['data'], dset='val')  # 검증용 데이터셋
     data_dev = Dataset(**config['data'], dset='dev')  # 개발용(예측 확인용) 데이터셋
 
@@ -468,35 +477,42 @@ def training_runner(rank, world_size, config, training_dir):
         logging.info("Training is done. The program is closed.")# 메인 프로세스에서 학습 종료 로그 출력
 
 def train_model(gpus, config, training_dir):
-    # 모델 학습을 실행하는 메인 함수. 여러 GPU를 활용한 멀티 프로세싱 학습을 지원.
+    # 모델 학습을 실행하는 메인 함수. 여러 GPU를 활용한 멀티 프로세싱 학습을 지원 -> 싱글 gpu 사용으로 코드 수정
 
     deterministic = torch.backends.cudnn.deterministic  # 현재 cudnn의 deterministic 설정을 백업
     benchmark = torch.backends.cudnn.benchmark  # 현재 cudnn의 benchmark 설정을 백업
 
-    PREV_CUDA_VISIBLE_DEVICES = os.environ.get("CUDA_VISIBLE_DEVICES", None)  # 기존 CUDA_VISIBLE_DEVICES 환경변수 저장
+    # PREV_CUDA_VISIBLE_DEVICES = os.environ.get("CUDA_VISIBLE_DEVICES", None)  # 기존 CUDA_VISIBLE_DEVICES 환경변수 저장
 
-    if PREV_CUDA_VISIBLE_DEVICES is None:
-        PREV_CUDA_VISIBLE_DEVICES = None  # 이전 설정이 없었다면 None으로 유지
-        os.environ["CUDA_VISIBLE_DEVICES"] = ",".join(
-            [str(gpu) for gpu in gpus])  # 학습에 사용할 GPU 목록을 환경변수로 설정 (예: "0,1,2")
-    else:
-        os.environ["CUDA_VISIBLE_DEVICES"] = PREV_CUDA_VISIBLE_DEVICES  # 기존에 설정된 값이 있으면 그대로 유지
+    # if PREV_CUDA_VISIBLE_DEVICES is None:
+    #     PREV_CUDA_VISIBLE_DEVICES = None  # 이전 설정이 없었다면 None으로 유지
+    #     os.environ["CUDA_VISIBLE_DEVICES"] = ",".join(
+    #         [str(gpu) for gpu in gpus])  # 학습에 사용할 GPU 목록을 환경변수로 설정 (예: "0,1,2")
+    # else:
+    #     os.environ["CUDA_VISIBLE_DEVICES"] = PREV_CUDA_VISIBLE_DEVICES  # 기존에 설정된 값이 있으면 그대로 유지
 
     torch.backends.cudnn.deterministic = False  # 학습 속도를 위해 cudnn의 결정론적 모드를 끔
     torch.backends.cudnn.benchmark = False  # 입력 크기가 일정하지 않더라도 성능 최적화를 비활성화
 
-    mp.spawn(  # torch.multiprocessing.spawn: 멀티프로세싱 시작
-        training_runner,  # 실행할 함수 (GPU 별 학습 루프)
-        nprocs=len(gpus),  # 프로세스 수 = 사용 GPU 수
-        args=(  # training_runner에 넘겨줄 인자들
-            len(gpus),     # world_size (총 GPU 수)
-            config,        # 학습 설정 딕셔너리
-            training_dir   # 로그/체크포인트 저장 디렉토리
-        )
+    # mp.spawn(  # torch.multiprocessing.spawn: 멀티프로세싱 시작
+    #     training_runner,  # 실행할 함수 (GPU 별 학습 루프)
+    #     nprocs=len(gpus),  # 프로세스 수 = 사용 GPU 수
+    #     args=(  # training_runner에 넘겨줄 인자들
+    #         len(gpus),     # world_size (총 GPU 수)
+    #         config,        # 학습 설정 딕셔너리
+    #         training_dir   # 로그/체크포인트 저장 디렉토리
+    #     )
+    # )
+        # 멀티 프로세싱 대신 단일 프로세스로 바로 실행
+    training_runner(
+        rank=0,            # GPU ID 0 사용
+        world_size=1,      # 전체 GPU 수 1개로 간주
+        config=config,
+        training_dir=training_dir
     )
 
-    if PREV_CUDA_VISIBLE_DEVICES is None:
-        del os.environ["CUDA_VISIBLE_DEVICES"]  # 학습 후, 임시로 설정했던 환경변수 삭제
+    # if PREV_CUDA_VISIBLE_DEVICES is None:
+    #     del os.environ["CUDA_VISIBLE_DEVICES"]  # 학습 후, 임시로 설정했던 환경변수 삭제
 
     torch.backends.cudnn.deterministic = deterministic  # 이전 cudnn 설정 복원
     torch.backends.cudnn.benchmark = benchmark  # 이전 cudnn 설정 복원
@@ -506,6 +522,7 @@ def main():
     parser.add_argument('--dir', "-d", type=str,
                         help="Path to save checkpoints and logs.")  # 저장 디렉토리 인자 추가
     args = parser.parse_args()  # 커맨드라인 인자 파싱
+    args.dir = "./llvc_nc"
 
     with open(os.path.join(args.dir, "config.json")) as f:
         config = json.load(f)  # 지정된 디렉토리에서 config.json 파일을 열고, JSON 설정 불러오기
