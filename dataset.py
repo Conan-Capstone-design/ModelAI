@@ -20,7 +20,7 @@ def get_dataset(dir):
         if match:
             converted_files.append(match[0])
         else:
-            print(f"변환된 파일 없음: {base_name}")
+            print(f"❌ 변환된 파일 없음: {base_name}")
             converted_files.append(None)  # 혹시 몰라서 None 넣음
     return original_files, converted_files
 
@@ -108,48 +108,99 @@ class LLVCDataset(torch.utils.data.Dataset): # 음성 데이터를 로드하는 
 import os
 from shutil import copyfile
 import glob
+import soundfile as sf
+
 
 # 원본과 캐릭터 음성 경로
 original_dir = "/content/drive/MyDrive/Colab_Notebooks/capstone/캡스톤_코난/aihub/02_wav/KsponSpeech_02/KsponSpeech_0125"
-converted_dir = "/content/drive/MyDrive/Colab_Notebooks/capstone/캡스톤_코난/짱구"
+# 캐릭터별 변환 음성 폴더
+converted_dirs = {
+    "shinchan": "/content/drive/MyDrive/Colab_Notebooks/capstone/캡스톤_코난/짱구",
+    "conan": "/content/drive/MyDrive/Colab_Notebooks/capstone/캡스톤_코난/코난/conan",
+    "keroro": "/content/drive/MyDrive/Colab_Notebooks/capstone/캡스톤_코난/케로로"
+}
 
-# 테스트용 output 폴더 (train에 저장)
-output_dir = "/content/drive/MyDrive/Colab_Notebooks/capstone/data/train"
+# 출력 폴더
+output_dir = "/content/drive/MyDrive/Colab_Notebooks/capstone/ModelAI/train"
 os.makedirs(output_dir, exist_ok=True)
 
-# 파일 1개씩만 선택
-original_file = glob.glob(os.path.join(original_dir, "*.wav"))
-converted_file = glob.glob(os.path.join(converted_dir, "*.wav"))
+# original 3개 복사
+original_files = glob.glob(os.path.join(original_dir, "*.wav"))[:3]
+for i, orig in enumerate(original_files):
+    dst = os.path.join(output_dir, f"speaker1_{i}_original.wav")
+    copyfile(orig, dst)
+    print(f"original {i} 복사 완료")
 
-# 길이 맞추기 (둘 중 작은 쪽 기준)
-num_files = min(len(original_file), len(converted_file))
+# 각 캐릭터에서 3개씩 복사 (keroro는 mp3 → wav 변환 필요)
+for character, char_dir in converted_dirs.items():
+    files = glob.glob(os.path.join(char_dir, "*"))
+    selected_files = sorted([f for f in files if f.endswith((".wav", ".mp3"))])[:3]
 
-for i in range(num_files):
-    orig = original_file[i]
-    conv = converted_file[i]
-    
-    orig_dst = os.path.join(output_dir, f"speaker1_{i}_original.wav")
-    # 짱구 폴더로 테스트
-    conv_dst = os.path.join(output_dir, f"speaker1_{i}_shinchan_converted.wav")
-    
-    copyfile(orig, orig_dst)
-    copyfile(conv, conv_dst)
-    print(f"{i} 복사중")
+    for j, src in enumerate(selected_files):
+        dst = os.path.join(output_dir, f"speaker1_{j}_{character}_converted.wav")
+        
+        if src.endswith(".mp3"):
+            print(f"{character} {j} mp3 → wav 변환 중")
+            audio, sr = librosa.load(src, sr=16000) # MP3 파일 디코딩 (→ Raw PCM 오디오)
+            sf.write(dst, audio, sr) # WAV 포맷으로 다시 인코딩해서 저장
+        else:
+            copyfile(src, dst)
+            print(f"{character} {j} wav 복사 완료")
 
-print(f"총 {i} 쌍 복사 완료")
+print("모든 캐릭터 음성 복사 완료")
 
-dataset = LLVCDataset(
-    dir="/content/drive/MyDrive/Colab_Notebooks/capstone/data", 
-    sr=16000, 
-    wav_len=16000, 
-    dset="train"
-)
-# converted_wav 개수
-print(len(dataset))
+import os
+import glob
+from collections import defaultdict
 
-# 전처리 converted_wav 정보 출력
-for i in range(len(dataset)):
-    converted, gt, target_index, filename = dataset[i]
-    print(f"Index {i}: {filename} - target_index = {target_index}")
-    print("converted:", converted.shape)
-    print("gt:", gt.shape)  
+# 캐릭터 → 인덱스 매핑
+character_to_index = {
+    "conan": 0,
+    "keroro": 1,
+    "shinchan": 2
+}
+
+def get_parallel_dataset_by_index(dir):
+    files = glob.glob(os.path.join(dir, "*.wav"))
+    grouped = defaultdict(dict)  # {0: {'original': ..., 'conan': ..., ...}, 1: {...}, ...}
+    result = []
+
+    for f in files:
+        filename = os.path.basename(f)
+
+        # 예: speaker1_2_original.wav → prefix=speaker1, idx=2, type=original
+        parts = filename.split("_")
+        if len(parts) < 3:
+            continue  # 예외 처리
+
+        idx = int(parts[1])  # speaker1_2 → 2
+
+        if "original" in filename:
+            grouped[idx]["original"] = f
+        else:
+            for char in character_to_index:
+                if char in filename:
+                    grouped[idx][char] = f
+
+    # 이제 같은 인덱스끼리 병렬 처리
+    for idx, data in grouped.items():
+        orig_path = data.get("original", None)
+        if not orig_path:
+            continue
+
+        for char, index in character_to_index.items():
+            converted_path = data.get(char, None)
+            if converted_path:
+                result.append((converted_path, orig_path, index))
+                print(f"인덱스 {idx}: {char} (Index {index}) 병렬처리 완료")
+            else:
+                print(f"인덱스 {idx}: {char} 변환 파일 없음")
+
+    return result
+
+parallel_data = get_parallel_dataset_by_index(output_dir)
+
+# 튜플 리스트 형태로 깔끔하게 출력
+print("\n병렬 처리된 튜플 목록:")
+for item in parallel_data:
+    print(item)
