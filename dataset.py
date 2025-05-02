@@ -104,24 +104,31 @@ class LLVCDataset(torch.utils.data.Dataset): # 음성 데이터를 로드하는 
 
         return converted, gt, target_index, filename
 
+import json
+
+# config.json 불러오기
+with open("llvc_nc/config.json", "r") as f:
+    config = json.load(f)
+
+# config에서 dir 값 가져오기
+base_dir = config["data"]["dir"]
 
 import os
 from shutil import copyfile
 import glob
 import soundfile as sf
 
-
 # 원본과 캐릭터 음성 경로
-original_dir = "/content/drive/MyDrive/Colab_Notebooks/capstone/캡스톤_코난/aihub/02_wav/KsponSpeech_02/KsponSpeech_0125"
+original_dir = os.path.join(base_dir, "aihub/02_wav/KsponSpeech_02/KsponSpeech_0125")
 # 캐릭터별 변환 음성 폴더
 converted_dirs = {
-    "shinchan": "/content/drive/MyDrive/Colab_Notebooks/capstone/캡스톤_코난/짱구",
-    "conan": "/content/drive/MyDrive/Colab_Notebooks/capstone/캡스톤_코난/코난/conan",
-    "keroro": "/content/drive/MyDrive/Colab_Notebooks/capstone/캡스톤_코난/케로로"
+    "shinchan": os.path.join(base_dir, "짱구"),
+    "conan": os.path.join(base_dir, "코난/conan"),
+    "keroro": os.path.join(base_dir, "케로로")
 }
 
 # 출력 폴더
-output_dir = "/content/drive/MyDrive/Colab_Notebooks/capstone/ModelAI/train"
+output_dir = os.path.join(base_dir, "train")
 os.makedirs(output_dir, exist_ok=True)
 
 # original 3개 복사
@@ -182,7 +189,7 @@ def get_parallel_dataset_by_index(dir):
                 if char in filename:
                     grouped[idx][char] = f
 
-    # 이제 같은 인덱스끼리 병렬 처리
+    # 같은 인덱스끼리 병렬 처리
     for idx, data in grouped.items():
         orig_path = data.get("original", None)
         if not orig_path:
