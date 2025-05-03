@@ -24,6 +24,27 @@ def get_dataset(dir):
             converted_files.append(None)  # 혹시 몰라서 None 넣음
     return original_files, converted_files
 
+def get_dataset_any_to_many(dir):
+    original_files = glob.glob(os.path.join(dir, "*_original.wav"))
+    data = []
+
+    character_map = {
+        "conan": 0,
+        "keroro": 1,
+        "shinchan": 2
+    }
+
+    for orig_path in original_files:
+        base = os.path.basename(orig_path).replace("_original.wav", "")
+        for character, index in character_map.items():
+            conv_path = os.path.join(dir, f"{base}_{character}_converted.wav")
+            if os.path.exists(conv_path):
+                data.append((orig_path, conv_path, index))
+            else:
+                print(f"변환 파일 없음: {conv_path}")
+
+    return data
+
 def load_wav(full_path, target_sr):
     # WAV 파일을 로드할 때 샘플링 레이트 맞추기
     data, sr = librosa.load(full_path, sr=target_sr)  # sr=target_sr로 지정하여 자동 리샘플링
@@ -62,48 +83,40 @@ class LLVCDataset(torch.utils.data.Dataset): # 음성 데이터를 로드하는 
         file_dir = os.path.join(dir, dset) # 데이터셋 경로 설정
         self.wav_len = wav_len # WAV 길이 저장
         self.sr = sr # 샘플링 레이트 저장
-        self.original_files, self.converted_files = get_dataset( # 파일 목록 불러오기
-            file_dir
-        )
+        self.data = get_dataset_any_to_many(file_dir)
+        # self.original_files, self.converted_files = get_dataset( # 파일 목록 불러오기
+        #     file_dir
+        # )
 
     def __len__(self):
-        return len(self.original_files) # 데이터셋의 크기 반환 (원본 파일 개수)
+        return len(self.data) # 데이터셋의 크기 반환 (원본 파일 개수)
+    
+    def get_target_name(self):
+        return {0: "conan", 1: "keroro", 2: "shinchan"}[self.target_index]
 
-    def __getitem__(self, idx): # 인덱스에 해당하는 데이터를 로드하여 반환하는 함수
-        original_wav = self.original_files[idx] # 원본 WAV 파일 경로 가져오기
-        converted_wav = self.converted_files[idx] # 변환된 WAV 파일 경로 가져오기
+    def __getitem__(self, idx):
+        original_path, converted_path, target_index = self.data[idx]
 
-        original_data, o_sr = load_wav(original_wav, self.sr) # 원본 음성 데이터 및 샘플링 레이트 로드
-        converted_data, c_sr = load_wav(converted_wav, self.sr) # 변환된 음성 데이터 및 샘플링 레이트 로드
+        original_data, o_sr = load_wav(original_path, self.sr)
+        converted_data, c_sr = load_wav(converted_path, self.sr)
 
-        assert o_sr == self.sr, f"Expected {self.sr}Hz, got {o_sr}Hz for file {original_wav}" # original_wav 샘플링 레이트 확인
-        assert c_sr == self.sr, f"Expected {self.sr}Hz, got {c_sr}Hz for file {converted_wav}" # converted_wav 샘플링 레이트 확인
+        assert o_sr == self.sr
+        assert c_sr == self.sr
 
-        converted = torch.from_numpy(original_data)  # original_data NumPy 배열을 PyTorch Tensor로 변환
-        gt = torch.from_numpy(converted_data)  # converted_data NumPy 배열을 PyTorch Tensor로 변환
+        converted = torch.from_numpy(original_data).unsqueeze(0).float() / 32768
+        gt = torch.from_numpy(converted_data).unsqueeze(0).float() / 32768
 
-        converted = converted.unsqueeze(0).to(torch.float) / 32768  # 16비트 PCM 정규화 및 차원 추가
-        gt = gt.unsqueeze(0).to(torch.float) / 32768 # 16비트 PCM 정규화 및 차원 추가
-
-        if gt.shape[-1] < self.wav_len: # gt 데이터 길이가 `wav_len`보다 짧으면 0으로 패딩
-            gt = torch.cat(
-                (gt, torch.zeros(1, self.wav_len - gt.shape[-1])), dim=1)
-        else: # `wav_len`보다 길면 잘라내기
+        if gt.shape[-1] < self.wav_len:
+            gt = torch.cat((gt, torch.zeros(1, self.wav_len - gt.shape[-1])), dim=1)
+        else:
             gt = gt[:, : self.wav_len]
 
-        if converted.shape[-1] < self.wav_len: # 변환된 데이터 길이가 `wav_len`보다 짧으면 0으로 패딩
-            converted = torch.cat(
-                (converted, torch.zeros(1, self.wav_len - converted.shape[-1])), dim=1
-            )
-        else: # `wav_len`보다 길면 잘라내기
+        if converted.shape[-1] < self.wav_len:
+            converted = torch.cat((converted, torch.zeros(1, self.wav_len - converted.shape[-1])), dim=1)
+        else:
             converted = converted[:, : self.wav_len]
 
-        #임의로 파일 이름에 따라 타겟 인덱스 지정해줌
-        filename = os.path.basename(self.converted_files[idx])
-        target_index = get_target_index_from_filename(filename)
-
-        return converted, gt, target_index, filename
-
+        return converted, gt, target_index
 # import json
 
 # # config.json 불러오기
