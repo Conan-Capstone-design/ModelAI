@@ -77,7 +77,7 @@ def training_runner(rank, world_size, config, training_dir):
 
     torch.manual_seed(config['seed'])  # 랜덤 시드 고정
 
-    data_train = Dataset(**config['data'], dset='짱구')  # 학습용 데이터셋 생성
+    data_train = Dataset(**config['data'], dset='train')  # 학습용 데이터셋 생성
     data_val = Dataset(**config['data'], dset='val')  # 검증용 데이터셋
     data_dev = Dataset(**config['data'], dset='dev')  # 개발용(예측 확인용) 데이터셋
 
@@ -367,12 +367,21 @@ def training_runner(rank, world_size, config, training_dir):
 
                 logging.info("Testing...")  # 테스트 시작 로그
 
+                speaker_map = {
+                    0: "conan",
+                    1: "keroro",
+                    2: "shinchan"
+                }
+
+
                 # 벤치마크 오디오들을 모델에 통과시켜 예측 결과 저장
                 for test_wav_name, test_wav in tqdm(test_wavs, total=len(test_wavs)):
-                    test_out = net_g(test_wav.unsqueeze(0).unsqueeze(0).to(device))  # [T] → [1, 1, T]로 reshape 후 모델에 입력
-                    audio_dict.update({
-                        f"test_audio/{test_wav_name}": test_out[0].data.cpu().numpy()  # 예측 결과를 audio_dict에 저장
-                    })
+                    for idx in range(3):  # 인덱스 0, 1, 2 전부 변환
+                        target_index = torch.tensor([idx], dtype=torch.long).to(device)
+                        test_out = net_g(test_wav.unsqueeze(0).unsqueeze(0).to(device), target_index=target_index)
+                        audio_dict.update({
+                            f"test_audio/{test_wav_name}_{speaker_map[idx]}": test_out[0].data.cpu().numpy()
+                        })
 
                 # dev 및 val 검증용 데이터셋을 사용해 성능 평가
                 for loader in [dev_loader, val_loader]:

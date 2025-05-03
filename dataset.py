@@ -20,7 +20,7 @@ def get_dataset(dir):
         if match:
             converted_files.append(match[0])
         else:
-            print(f"❌ 변환된 파일 없음: {base_name}")
+            print(f"변환된 파일 없음: {base_name}")
             converted_files.append(None)  # 혹시 몰라서 None 넣음
     return original_files, converted_files
 
@@ -104,110 +104,110 @@ class LLVCDataset(torch.utils.data.Dataset): # 음성 데이터를 로드하는 
 
         return converted, gt, target_index, filename
 
-import json
+# import json
 
-# config.json 불러오기
-with open("llvc_nc/config.json", "r") as f:
-    config = json.load(f)
+# # config.json 불러오기
+# with open("llvc_nc/config.json", "r") as f:
+#     config = json.load(f)
 
-# config에서 dir 값 가져오기
-base_dir = config["data"]["dir"]
+# # config에서 dir 값 가져오기
+# base_dir = config["data"]["dir"]
 
-import os
-from shutil import copyfile
-import glob
-import soundfile as sf
+# import os
+# from shutil import copyfile
+# import glob
+# import soundfile as sf
 
-# 원본과 캐릭터 음성 경로
-original_dir = os.path.join(base_dir, "aihub/02_wav/KsponSpeech_02/KsponSpeech_0125")
-# 캐릭터별 변환 음성 폴더
-converted_dirs = {
-    "shinchan": os.path.join(base_dir, "짱구"),
-    "conan": os.path.join(base_dir, "코난/conan"),
-    "keroro": os.path.join(base_dir, "케로로")
-}
+# # 원본과 캐릭터 음성 경로
+# original_dir = os.path.join(base_dir, "aihub/02_wav/KsponSpeech_02/KsponSpeech_0125")
+# # 캐릭터별 변환 음성 폴더
+# converted_dirs = {
+#     "shinchan": os.path.join(base_dir, "짱구"),
+#     "conan": os.path.join(base_dir, "코난/conan"),
+#     "keroro": os.path.join(base_dir, "케로로")
+# }
 
-# 출력 폴더
-output_dir = os.path.join(base_dir, "train")
-os.makedirs(output_dir, exist_ok=True)
+# # 출력 폴더
+# output_dir = os.path.join(base_dir, "train")
+# os.makedirs(output_dir, exist_ok=True)
 
-# original 3개 복사
-original_files = glob.glob(os.path.join(original_dir, "*.wav"))[:3]
-for i, orig in enumerate(original_files):
-    dst = os.path.join(output_dir, f"speaker1_{i}_original.wav")
-    copyfile(orig, dst)
-    print(f"original {i} 복사 완료")
+# # original 3개 복사
+# original_files = glob.glob(os.path.join(original_dir, "*.wav"))[:3]
+# for i, orig in enumerate(original_files):
+#     dst = os.path.join(output_dir, f"speaker1_{i}_original.wav")
+#     copyfile(orig, dst)
+#     print(f"original {i} 복사 완료")
 
-# 각 캐릭터에서 3개씩 복사 (keroro는 mp3 → wav 변환 필요)
-for character, char_dir in converted_dirs.items():
-    files = glob.glob(os.path.join(char_dir, "*"))
-    selected_files = sorted([f for f in files if f.endswith((".wav", ".mp3"))])[:3]
+# # 각 캐릭터에서 3개씩 복사 (keroro는 mp3 → wav 변환 필요)
+# for character, char_dir in converted_dirs.items():
+#     files = glob.glob(os.path.join(char_dir, "*"))
+#     selected_files = sorted([f for f in files if f.endswith((".wav", ".mp3"))])[:3]
 
-    for j, src in enumerate(selected_files):
-        dst = os.path.join(output_dir, f"speaker1_{j}_{character}_converted.wav")
+#     for j, src in enumerate(selected_files):
+#         dst = os.path.join(output_dir, f"speaker1_{j}_{character}_converted.wav")
         
-        if src.endswith(".mp3"):
-            print(f"{character} {j} mp3 → wav 변환 중")
-            audio, sr = librosa.load(src, sr=16000) # MP3 파일 디코딩 (→ Raw PCM 오디오)
-            sf.write(dst, audio, sr) # WAV 포맷으로 다시 인코딩해서 저장
-        else:
-            copyfile(src, dst)
-            print(f"{character} {j} wav 복사 완료")
+#         if src.endswith(".mp3"):
+#             print(f"{character} {j} mp3 → wav 변환 중")
+#             audio, sr = librosa.load(src, sr=16000) # MP3 파일 디코딩 (→ Raw PCM 오디오)
+#             sf.write(dst, audio, sr) # WAV 포맷으로 다시 인코딩해서 저장
+#         else:
+#             copyfile(src, dst)
+#             print(f"{character} {j} wav 복사 완료")
 
-print("모든 캐릭터 음성 복사 완료")
+# print("모든 캐릭터 음성 복사 완료")
 
-import os
-import glob
-from collections import defaultdict
+# import os
+# import glob
+# from collections import defaultdict
 
-# 캐릭터 → 인덱스 매핑
-character_to_index = {
-    "conan": 0,
-    "keroro": 1,
-    "shinchan": 2
-}
+# # 캐릭터 → 인덱스 매핑
+# character_to_index = {
+#     "conan": 0,
+#     "keroro": 1,
+#     "shinchan": 2
+# }
 
-def get_parallel_dataset_by_index(dir):
-    files = glob.glob(os.path.join(dir, "*.wav"))
-    grouped = defaultdict(dict)  # {0: {'original': ..., 'conan': ..., ...}, 1: {...}, ...}
-    result = []
+# def get_parallel_dataset_by_index(dir):
+#     files = glob.glob(os.path.join(dir, "*.wav"))
+#     grouped = defaultdict(dict)  # {0: {'original': ..., 'conan': ..., ...}, 1: {...}, ...}
+#     result = []
 
-    for f in files:
-        filename = os.path.basename(f)
+#     for f in files:
+#         filename = os.path.basename(f)
 
-        # 예: speaker1_2_original.wav → prefix=speaker1, idx=2, type=original
-        parts = filename.split("_")
-        if len(parts) < 3:
-            continue  # 예외 처리
+#         # 예: speaker1_2_original.wav → prefix=speaker1, idx=2, type=original
+#         parts = filename.split("_")
+#         if len(parts) < 3:
+#             continue  # 예외 처리
 
-        idx = int(parts[1])  # speaker1_2 → 2
+#         idx = int(parts[1])  # speaker1_2 → 2
 
-        if "original" in filename:
-            grouped[idx]["original"] = f
-        else:
-            for char in character_to_index:
-                if char in filename:
-                    grouped[idx][char] = f
+#         if "original" in filename:
+#             grouped[idx]["original"] = f
+#         else:
+#             for char in character_to_index:
+#                 if char in filename:
+#                     grouped[idx][char] = f
 
-    # 같은 인덱스끼리 병렬 처리
-    for idx, data in grouped.items():
-        orig_path = data.get("original", None)
-        if not orig_path:
-            continue
+#     # 같은 인덱스끼리 병렬 처리
+#     for idx, data in grouped.items():
+#         orig_path = data.get("original", None)
+#         if not orig_path:
+#             continue
 
-        for char, index in character_to_index.items():
-            converted_path = data.get(char, None)
-            if converted_path:
-                result.append((converted_path, orig_path, index))
-                print(f"인덱스 {idx}: {char} (Index {index}) 병렬처리 완료")
-            else:
-                print(f"인덱스 {idx}: {char} 변환 파일 없음")
+#         for char, index in character_to_index.items():
+#             converted_path = data.get(char, None)
+#             if converted_path:
+#                 result.append((converted_path, orig_path, index))
+#                 print(f"인덱스 {idx}: {char} (Index {index}) 병렬처리 완료")
+#             else:
+#                 print(f"인덱스 {idx}: {char} 변환 파일 없음")
 
-    return result
+#     return result
 
-parallel_data = get_parallel_dataset_by_index(output_dir)
+# parallel_data = get_parallel_dataset_by_index(output_dir)
 
-# 튜플 리스트 형태로 깔끔하게 출력
-print("\n병렬 처리된 튜플 목록:")
-for item in parallel_data:
-    print(item)
+# # 튜플 리스트 형태로 깔끔하게 출력
+# print("\n병렬 처리된 튜플 목록:")
+# for item in parallel_data:
+#     print(item)
