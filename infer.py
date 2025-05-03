@@ -56,17 +56,9 @@ def save_audio(audio, audio_path, sample_rate):
     torchaudio.save(audio_path, audio, sample_rate)
 
 
-def infer(model, audio):
-    """ 모델을 사용하여 오디오 데이터를 변조하는 함수
-    
-    Args:
-        model (Net): 변조할 모델
-        audio (torch.Tensor): 입력 오디오 데이터
-    
-    Returns:
-        torch.Tensor: 변조된 오디오 데이터
-    """
-    return model(audio.unsqueeze(0).unsqueeze(0)).squeeze(0)  # 배치 차원 추가 후 모델 예측 수행
+def infer(model, audio, target_index):
+    return model(audio.unsqueeze(0).unsqueeze(0), target_index=target_index).squeeze(0)
+
 
 
 def infer_stream(model, audio, chunk_factor, sr):
@@ -125,24 +117,26 @@ def infer_stream(model, audio, chunk_factor, sr):
     return outputs, rtf, e2e_latency
 
 
-def do_infer(model, audio, chunk_factor, sr, stream):
-    """ 주어진 스트리밍 모드에 따라 적절한 인퍼런스 함수 호출 """
+def do_infer(model, audio, chunk_factor, sr, stream, target_index):
     with torch.no_grad():
         if stream:
             return infer_stream(model, audio, chunk_factor, sr)
         else:
-            return infer(model, audio), None, None
+            return infer(model, audio, target_index), None, None
 
 
 def main():
     """ 명령줄 인자를 받아 오디오 변조를 실행하는 메인 함수 """
     parser = argparse.ArgumentParser()
-    parser.add_argument('--checkpoint_path', '-p', type=str, default='llvc_models/models/checkpoints/llvc/G_500000.pth', help='모델 체크포인트 경로')
-    parser.add_argument('--config_path', '-c', type=str, default='experiments/llvc/config.json', help='모델 설정 파일 경로')
-    parser.add_argument('--fname', '-f', type=str, default='test_wavs', help='오디오 파일 또는 디렉토리 경로')
+    # parser.add_argument('--checkpoint_path', '-p', type=str, default='llvc_models/models/checkpoints/llvc/G_500000.pth', help='모델 체크포인트 경로')
+    # parser.add_argument('--config_path', '-c', type=str, default='experiments/llvc/config.json', help='모델 설정 파일 경로')
+    parser.add_argument('--checkpoint_path', '-p', type=str, default='/content/drive/MyDrive/project/ModelAI/llvc_nc/checkpoints/G_300.pth', help='모델 체크포인트 경로')
+    parser.add_argument('--config_path', '-c', type=str, default='/content/drive/MyDrive/project/ModelAI/llvc_nc/config.json', help='모델 설정 파일 경로')
+    parser.add_argument('--fname', '-f', type=str, default='/content/drive/MyDrive/캡스톤_코난/test_wavs',help='오디오 파일 또는 디렉토리 경로')
     parser.add_argument('--out_dir', '-o', type=str, default='converted_out', help='출력 오디오 저장 디렉토리')
     parser.add_argument('--chunk_factor', '-n', type=int, default=1, help='청크 인자 (스트리밍 처리용)')
     parser.add_argument('--stream', '-s', action='store_true', help='스트리밍 인퍼런스 사용 여부')
+    parser.add_argument('--target_index', '-t', type=int, default=0, help='타겟 화자 인덱스 (예: 0=코난, 1=케로로, 2=짱구)')
     args = parser.parse_args()
     
     model, sr = load_model(args.checkpoint_path, args.config_path)
@@ -152,7 +146,7 @@ def main():
         fnames = glob_audio_files(args.fname)
         for fname in tqdm(fnames):
             audio = load_audio(fname, sr)
-            out, _, _ = do_infer(model, audio, args.chunk_factor, sr, args.stream)
+            out, _, _ = do_infer(model, audio, args.chunk_factor, sr, args.stream, torch.tensor([args.target_index]))
             save_audio(out, os.path.join(args.out_dir, os.path.basename(fname)), sr)
         print(f"Saved outputs to {args.out_dir}")
     
