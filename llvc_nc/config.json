@@ -115,7 +115,7 @@
   "disc_loss_c": 1,
   "feature_loss_c": 2,
   "seed": 1234,
-  "test_dir": "test_wavs",
+  "test_dir": "/content/drive/MyDrive/캡스톤_코난/test_wavs",
   "discriminator": "rvc",
   "periods": [
     2,
