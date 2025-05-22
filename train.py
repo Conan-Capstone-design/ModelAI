@@ -118,20 +118,27 @@ def training_runner(rank, world_size, config, training_dir):
     train_loader = torch.utils.data.DataLoader(
         data_train,
         batch_size=config['batch_size'],
-        sampler=train_sampler
+        sampler=train_sampler,
+        num_workers=0,
+        pin_memory=True
     )
 
     val_loader = torch.utils.data.DataLoader(
         data_val,
         batch_size=config['eval_batch_size'],
-        sampler=val_sampler
+        sampler=val_sampler,
+        num_workers=0,
+        pin_memory=True
     )
 
     dev_loader = torch.utils.data.DataLoader(
         data_dev,
         batch_size=config['eval_batch_size'],
-        sampler=dev_sampler
+        sampler=dev_sampler,
+        num_workers=0,
+        pin_memory=True
     )
+
 
 
     net_g = Net(**config['model_params'])  # 생성자(generator) 모델 초기화
