@@ -237,7 +237,7 @@ def training_runner(rank, world_size, config, training_dir):
     loss_mel_avg = utils.RunningAvg() # mel 스펙트로그램 손실의 이동 평균을 계산하기 위한 도우미 클래스
     loss_fairseq_avg = utils.RunningAvg()  # fairseq 기반 손실의 이동 평균 저장용 클래스
 
-    for epoch in range(epoch, 10000):  # 현재 에폭부터 시작해서 최대 10000 에폭까지 반복
+    for epoch in range(epoch, 5):  # 현재 에폭부터 시작해서 최대 10000 에폭까지 반복
         # train_loader.batch_sampler.set_epoch(epoch)  # (분산 학습 시) 데이터 셔플링을 위해 에폭마다 시드 설정, 현재는 주석 처리됨
         train_sampler.set_epoch(epoch)
 
