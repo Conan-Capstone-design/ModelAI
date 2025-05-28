@@ -11,12 +11,12 @@ import glob # 파일 패턴 매칭을 위한 라이브러리
 import librosa
 
 def get_dataset(dir):
-    original_files = glob.glob(os.path.join(dir, "*_original.wav"))
+    original_files = glob.glob(os.path.join(dir, "**", "*_original.wav"), recursive=True)
     converted_files = []
     for original_file in original_files:
         base_name = os.path.basename(original_file).replace("_original.wav", "")
         # 캐릭터 이름이 들어간 converted 파일 탐색
-        match = glob.glob(os.path.join(dir, f"{base_name}_*converted.wav"))
+        match = glob.glob(os.path.join(dir, "**", f"{base_name}_*converted.wav"), recursive=True)
         if match:
             converted_files.append(match[0])
         else:
@@ -24,27 +24,48 @@ def get_dataset(dir):
             converted_files.append(None)  # 혹시 몰라서 None 넣음
     return original_files, converted_files
 
+
 def get_dataset_any_to_many(dir):
-    original_files = glob.glob(os.path.join(dir, "*_original.wav"))
+    all_wav_files = glob.glob(os.path.join(dir, "**", "*.wav"), recursive=True)
+    grouped = defaultdict(dict)
     data = []
 
     character_map = {
         "conan": 0,
         "keroro": 1,
-        "shinchan": 2
+        "jjanggu": 2
     }
 
-    for orig_path in original_files:
-        base = os.path.basename(orig_path).replace("_original.wav", "")
+    for f in all_wav_files:
+        filename = os.path.basename(f)
+
+        # prefix: 확장자 떼고, 캐릭터/converted 떼고 남은 공통 부분
+        if filename.endswith("_conan_converted.wav"):
+            prefix = filename.replace("_conan_converted.wav", "")
+            grouped[prefix]["conan"] = f
+        elif filename.endswith("_keroro_converted.wav"):
+            prefix = filename.replace("_keroro_converted.wav", "")
+            grouped[prefix]["keroro"] = f
+        elif filename.endswith("_jjanggu_converted.wav"):
+            prefix = filename.replace("_jjanggu_converted.wav", "")
+            grouped[prefix]["jjanggu"] = f
+        elif filename.endswith(".wav"):
+            if "_converted" not in filename:
+                prefix = filename.replace(".wav", "")
+                grouped[prefix]["original"] = f
+
+    for prefix, files in grouped.items():
+        orig = files.get("original")
+        if not orig:
+            continue
         for character, index in character_map.items():
-            conv_path = os.path.join(dir, f"{base}_{character}_converted.wav")
-            if os.path.exists(conv_path):
-                data.append((orig_path, conv_path, index))
+            conv = files.get(character)
+            if conv:
+                data.append((orig, conv, index))
             else:
-                print(f"변환 파일 없음: {conv_path}")
+                print(f"[{prefix}] {character} 변환 파일 없음")
 
     return data
-
 def load_wav(full_path, target_sr):
     # WAV 파일을 로드할 때 샘플링 레이트 맞추기
     data, sr = librosa.load(full_path, sr=target_sr)  # sr=target_sr로 지정하여 자동 리샘플링
@@ -55,7 +76,7 @@ def get_target_index_from_filename(filename):
     character_map = {
         "conan": 0,
         "keroro": 1,
-        "shinchan": 2
+        "jjanggu": 2
     }
 
     filename = filename.lower()  # 대소문자 무시
@@ -92,7 +113,7 @@ class LLVCDataset(torch.utils.data.Dataset): # 음성 데이터를 로드하는 
         return len(self.data) # 데이터셋의 크기 반환 (원본 파일 개수)
     
     def get_target_name(self):
-        return {0: "conan", 1: "keroro", 2: "shinchan"}[self.target_index]
+        return {0: "conan", 1: "keroro", 2: "jjanggu"}[self.target_index]
 
     def __getitem__(self, idx):
         original_path, converted_path, target_index = self.data[idx]

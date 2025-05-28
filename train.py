@@ -63,7 +63,7 @@ def training_runner(rank, world_size, config, training_dir):
     checkpoint_dir = os.path.join(training_dir, "checkpoints")  # 체크포인트 저장 디렉토리 경로 설정
 
     # device = "cuda" if torch.cuda.is_available() else "cpu"  # GPU 사용 가능 여부 확인
-    device = torch.device(f"cuda:{rank}")
+    device = torch.device(f"cuda:0")
 
     is_multi_process = world_size > 1  # 분산 학습 여부
     is_main_process = rank == 0  # 현재 프로세스가 메인인지 여부
@@ -425,7 +425,7 @@ def training_runner(rank, world_size, config, training_dir):
                 speaker_map = {
                     0: "conan",
                     1: "keroro",
-                    2: "shinchan"
+                    2: "jjanggu"
                 }
 
 
@@ -558,7 +558,7 @@ def train_model(gpus, config, training_dir):
     torch.backends.cudnn.deterministic = False  # 학습 속도를 위해 cudnn의 결정론적 모드를 끔
     torch.backends.cudnn.benchmark = False  # 입력 크기가 일정하지 않더라도 성능 최적화를 비활성화
 
-    num_processes = 4
+    num_processes = 1
 
     # mp.spawn(  # torch.multiprocessing.spawn: 멀티프로세싱 시작
     #     training_runner,  # 실행할 함수 (GPU 별 학습 루프)
