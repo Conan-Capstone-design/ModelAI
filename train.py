@@ -558,7 +558,7 @@ def train_model(gpus, config, training_dir):
     torch.backends.cudnn.deterministic = False  # 학습 속도를 위해 cudnn의 결정론적 모드를 끔
     torch.backends.cudnn.benchmark = False  # 입력 크기가 일정하지 않더라도 성능 최적화를 비활성화
 
-    num_processes = 8
+    num_processes = 4
 
     # mp.spawn(  # torch.multiprocessing.spawn: 멀티프로세싱 시작
     #     training_runner,  # 실행할 함수 (GPU 별 학습 루프)
