@@ -1,5 +1,6 @@
 import subprocess
 import argparse
+import torch
 from pathlib import Path
 
 # LLVC inference functions from the repository
@@ -25,7 +26,8 @@ def modulate_audio(
     output_audio: Path,
     checkpoint_path: str,
     config_path: str,
-    device: str = 'cpu'
+    device: str,
+    target_index: int
 ) -> None:
     """
     Loads the LLVC model, runs inference on the extracted WAV, and saves the converted audio.
@@ -41,7 +43,8 @@ def modulate_audio(
     # Load audio tensor
     audio_tensor = load_audio(str(input_audio), sr)
     # Convert (non-streaming)
-    converted_tensor, _, _ = do_infer(model, audio_tensor, chunk_factor=1, sr=sr, stream=False)
+    converted_tensor, _, _ = do_infer(model, audio_tensor, chunk_factor=1, sr=sr, stream=False, 
+                                      target_index=torch.tensor([target_index]))
     # Save the converted audio
     save_audio(converted_tensor.unsqueeze(0), str(output_audio), sr)
 
@@ -81,8 +84,8 @@ def convert_video_voice(args: argparse.Namespace) -> None:
         audio_mod,
         args.checkpoint,
         args.config,
-        args.device
-    )
+        args.device,
+        target_index=args.target_index)
 
     print(f"[*] Merging converted audio into {video_out}...")
     merge_audio_video(video_in, audio_mod, video_out)
@@ -108,12 +111,16 @@ def main() -> None:
     )
     parser.add_argument(
         '--config',         required=True,
-        help='Path to LLVC config JSON (e.g., experiments/llvc/config.json)'
+        help='Path to LLVC config JSON (e.g., /content/ModelAI/llvc_nc/config.json)'
     )
     parser.add_argument(
         '-d', '--device',    default='cpu',
         choices=['cpu','cuda'],
         help='Device to run inference on'
+    )
+    parser.add_argument(
+    '-t', '--target_index', type=int, required=True,
+    help='Target speaker index (e.g., 0=Conan, 1=Keroro, 2=Jjanggu)'
     )
     args = parser.parse_args()
     convert_video_voice(args)
