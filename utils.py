@@ -59,6 +59,24 @@ def latest_checkpoint_path(dir_path, regex="G_*.pth"):
     filepath = filelist[-1]     #정렬 후 마지막(가장 큰 숫자) 파일 경로
     return filepath
 
+def load_checkpoint_partial(path, model, optimizer=None):
+    checkpoint = torch.load(path, map_location='cpu')
+    state_dict = checkpoint["model"]
+
+    model_state_dict = model.state_dict()
+    filtered_state_dict = {
+        k: v for k, v in state_dict.items()
+        if k in model_state_dict and v.shape == model_state_dict[k].shape
+    }
+
+    model.load_state_dict(filtered_state_dict, strict=False)
+
+    if optimizer and "optimizer" in checkpoint:
+        optimizer.load_state_dict(checkpoint["optimizer"])
+        return model, optimizer, checkpoint.get("lr", 0.0), checkpoint.get("epoch", 0), checkpoint.get("step", 0)
+    else:
+        return model, None, checkpoint.get("lr", 0.0), checkpoint.get("epoch", 0), checkpoint.get("step", 0)
+
 
 """
 체크포인트(.pth) 파일을 로드해서 model과 optimizer의 상태를 복원원

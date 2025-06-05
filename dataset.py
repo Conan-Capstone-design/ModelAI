@@ -5,18 +5,35 @@ Torch dataset object for synthetically rendered spatial data.
 import os # 운영체제(OS)와 상호작용할 수 있도록 도와주는 기본 라이브러리, 파일 경로나 디렉토리 관리, 환경 변수 접근 등을 할 때 사용
 import torch # PyTorch 라이브러리를 가져오는 코드
 from scipy.io.wavfile import read # WAV 파일을 읽기 위한 라이브러리
-import os
 import re
 import glob # 파일 패턴 매칭을 위한 라이브러리
+from collections import defaultdict
 
-def get_dataset(dir): # 주어진 디렉토리에서 '_original.wav' 파일과 대응하는 '_converted.wav' 파일을 찾는 함수
-    original_files = glob.glob(os.path.join(dir, "*_original.wav")) # '_original.wav' 파일 목록을 가져옴
-    converted_files = [] # 변환된 파일 목록을 저장할 리스트
-    for original_file in original_files:
-        converted_file = original_file.replace( 
-            "_original.wav", "_converted.wav") # "_original.wav" -> '_converted.wav'로 변경
-        converted_files.append(converted_file) # 변환된 파일 리스트에 저장
-    return original_files, converted_files # 원본 파일과 변환된 파일 목록 반환
+
+def get_dataset_conan_only(dir):
+    all_wavs = glob.glob(os.path.join(dir, "**", "*.wav"), recursive=True)
+    grouped = defaultdict(dict)
+    result = []
+
+    for f in all_wavs:
+        fname = os.path.basename(f)
+
+        if fname.endswith("_conan_converted.wav"):
+            prefix = fname.replace("_conan_converted.wav", "")
+            grouped[prefix]["conan"] = f
+        elif "_converted" not in fname:
+            prefix = fname.replace(".wav", "")
+            grouped[prefix]["original"] = f
+
+    for prefix, file_dict in grouped.items():
+        orig = file_dict.get("original")
+        conan = file_dict.get("conan")
+        if orig and conan:
+            result.append((orig, conan, 0))
+        else:
+            print(f"[스킵] {prefix} → conan 변환 파일이 없거나 original 없음")
+
+    return result
 
 
 def load_wav(full_path): # 주어진 경로의 WAV 파일을 로드하는 함수
@@ -42,45 +59,34 @@ class LLVCDataset(torch.utils.data.Dataset): # 음성 데이터를 로드하는 
         file_dir = os.path.join(dir, dset) # 데이터셋 경로 설정
         self.wav_len = wav_len # WAV 길이 저장
         self.sr = sr # 샘플링 레이트 저장
-        self.original_files, self.converted_files = get_dataset( # 파일 목록 불러오기
-            file_dir
-        )
-
+        # self.original_files, self.converted_files = get_dataset( # 파일 목록 불러오기
+        #     file_dir
+        # )
+        self.data = get_dataset_conan_only(file_dir)
+        
     def __len__(self):
-        return len(self.original_files) # 데이터셋의 크기 반환 (원본 파일 개수)
+        return len(self.data)  # ← 이게 맞음!
 
-    def __getitem__(self, idx): # 인덱스에 해당하는 데이터를 로드하여 반환하는 함수
-        original_wav = self.original_files[idx] # 원본 WAV 파일 경로 가져오기
-        converted_wav = self.converted_files[idx] # 변환된 WAV 파일 경로 가져오기
+    def __getitem__(self, idx):
+        original_wav, converted_wav, target_index = self.data[idx]
 
-        original_data, o_sr = load_wav(original_wav) # 원본 음성 데이터 및 샘플링 레이트 로드
-        converted_data, c_sr = load_wav(converted_wav) # 변환된 음성 데이터 및 샘플링 레이트 로드
+        original_data, o_sr = load_wav(original_wav)
+        converted_data, c_sr = load_wav(converted_wav)
 
-        assert o_sr == self.sr, f"Expected {self.sr}Hz, got {o_sr}Hz for file {original_wav}" # original_wav 샘플링 레이트 확인
-        assert c_sr == self.sr, f"Expected {self.sr}Hz, got {c_sr}Hz for file {converted_wav}" # converted_wav 샘플링 레이트 확인
+        assert o_sr == self.sr, f"Expected {self.sr}Hz, got {o_sr}Hz for file {original_wav}"
+        assert c_sr == self.sr, f"Expected {self.sr}Hz, got {c_sr}Hz for file {converted_wav}"
 
-        converted = torch.from_numpy(original_data)  # original_data NumPy 배열을 PyTorch Tensor로 변환
-        gt = torch.from_numpy(converted_data)  # converted_data NumPy 배열을 PyTorch Tensor로 변환
+        converted = torch.from_numpy(original_data).unsqueeze(0).float() / 32768
+        gt = torch.from_numpy(converted_data).unsqueeze(0).float() / 32768
 
-        converted = converted.unsqueeze(0).to(torch.float) / 32768  # 16비트 PCM 정규화 및 차원 추가
-        gt = gt.unsqueeze(0).to(torch.float) / 32768 # 16비트 PCM 정규화 및 차원 추가
-
-        if gt.shape[-1] < self.wav_len: # gt 데이터 길이가 `wav_len`보다 짧으면 0으로 패딩
-            gt = torch.cat(
-                (gt, torch.zeros(1, self.wav_len - gt.shape[-1])), dim=1)
-        else: # `wav_len`보다 길면 잘라내기
+        if gt.shape[-1] < self.wav_len:
+            gt = torch.cat((gt, torch.zeros(1, self.wav_len - gt.shape[-1])), dim=1)
+        else:
             gt = gt[:, : self.wav_len]
 
-        if converted.shape[-1] < self.wav_len: # 변환된 데이터 길이가 `wav_len`보다 짧으면 0으로 패딩
-            converted = torch.cat(
-                (converted, torch.zeros(1, self.wav_len - converted.shape[-1])), dim=1
-            )
-        else: # `wav_len`보다 길면 잘라내기
+        if converted.shape[-1] < self.wav_len:
+            converted = torch.cat((converted, torch.zeros(1, self.wav_len - converted.shape[-1])), dim=1)
+        else:
             converted = converted[:, : self.wav_len]
-
-        #임의로 파일 이름에 따라 타겟 인덱스 지정해줌
-        filename = os.path.basename(self.original_files[idx])
-        match = re.search(r"speaker(\d+)_", filename)
-        target_index = int(match.group(1)) if match else 0
 
         return converted, gt, target_index

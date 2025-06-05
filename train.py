@@ -19,6 +19,7 @@ from model import Net
 from torch.nn.parallel import DistributedDataParallel as DDP
 import utils
 import fairseq
+from utils import load_checkpoint_partial
 
 #분산 학습에서 마스터 프로세스(master process) 가 동작하는 주소를 지정//
 os.environ['MASTER_ADDR'] = 'localhost'
@@ -46,25 +47,42 @@ def net_g_step(batch, net_g, device, fp16_run):
 
 
 def training_runner(rank, world_size, config, training_dir):
+    # 멀티 프로세싱용 초기화
+    dist.init_process_group(
+        backend="nccl", init_method="env://", rank=rank, world_size=world_size
+    )
+
     log_dir = os.path.join(training_dir, "logs")  # 로그 디렉토리 경로 설정
     checkpoint_dir = os.path.join(training_dir, "checkpoints")  # 체크포인트 저장 디렉토리 경로 설정
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"  # GPU 사용 가능 여부 확인
+    # device = "cuda" if torch.cuda.is_available() else "cpu"  # GPU 사용 가능 여부 확인
+    device = torch.device(f"cuda:0")
 
     is_multi_process = world_size > 1  # 분산 학습 여부
     is_main_process = rank == 0  # 현재 프로세스가 메인인지 여부
 
-    if is_main_process:
-        os.makedirs(log_dir, exist_ok=True)  # 로그 디렉토리 생성
-        os.makedirs(checkpoint_dir, exist_ok=True)  # 체크포인트 디렉토리 생성
-        writer = SummaryWriter(log_dir=log_dir)  # TensorBoard 로그 기록기 초기화
+    # if is_main_process:
+    #     os.makedirs(log_dir, exist_ok=True)  # 로그 디렉토리 생성
+    #     os.makedirs(checkpoint_dir, exist_ok=True)  # 체크포인트 디렉토리 생성
+    #     writer = SummaryWriter(log_dir=log_dir)  # TensorBoard 로그 기록기 초기화
 
-    dist.init_process_group(
-        backend="gloo", init_method="env://", rank=rank, world_size=world_size
-    )  # PyTorch 분산 학습 프로세스 그룹 초기화 (환경변수 방식 사용)
+    if rank == 0:
+        logging.basicConfig(level=logging.INFO)
+        os.makedirs(log_dir, exist_ok=True)
+        os.makedirs(checkpoint_dir, exist_ok=True)
+        writer = SummaryWriter(log_dir=log_dir)
+    else:
+        writer = None
 
-    if is_multi_process:
-        torch.cuda.set_device(rank)  # rank에 해당하는 GPU 사용 설정
+    # dist.init_process_group(
+    #     backend="gloo", init_method="env://", rank=rank, world_size=world_size
+    # )  # PyTorch 분산 학습 프로세스 그룹 초기화 (환경변수 방식 사용)
+
+    # if world_size > 1:
+    #     dist.init_process_group(backend="gloo", init_method="env://", rank=rank, world_size=world_size)
+
+    # if is_multi_process:
+    #     torch.cuda.set_device(rank)  # rank에 해당하는 GPU 사용 설정
 
     torch.manual_seed(config['seed'])  # 랜덤 시드 고정
 
@@ -75,23 +93,49 @@ def training_runner(rank, world_size, config, training_dir):
     for ds in [data_train, data_val, data_dev]:
         logging.info(f"Loaded dataset at {ds.dset} containing {len(ds)} elements")  # 로드된 데이터셋 정보 로그
 
-    train_loader = torch.utils.data.DataLoader(data_train,
-                                               batch_size=config['batch_size'],
-                                               shuffle=True)  # 학습용 데이터로더
+    # train_loader = torch.utils.data.DataLoader(data_train,
+    #                                            batch_size=config['batch_size'],
+    #                                            shuffle=True)  # 학습용 데이터로더
 
-    val_loader = torch.utils.data.DataLoader(data_val,
-                                             batch_size=config['eval_batch_size'])  # 검증용 데이터로더
+    # val_loader = torch.utils.data.DataLoader(data_val,
+    #                                          batch_size=config['eval_batch_size'])  # 검증용 데이터로더
 
-    dev_loader = torch.utils.data.DataLoader(data_dev,
-                                             batch_size=config['eval_batch_size'])  # 개발용 데이터로더
+    # dev_loader = torch.utils.data.DataLoader(data_dev,
+    #                                          batch_size=config['eval_batch_size'])  # 개발용 데이터로더
+
+    train_loader = torch.utils.data.DataLoader(
+        data_train,
+        batch_size=config['batch_size'],
+        shuffle=True,
+        num_workers=8,
+        pin_memory=True
+    )
+
+    val_loader = torch.utils.data.DataLoader(
+        data_val,
+        batch_size=config['eval_batch_size'],
+        shuffle=False,
+        num_workers=2,
+        pin_memory=True
+    )
+
+    dev_loader = torch.utils.data.DataLoader(
+        data_dev,
+        batch_size=config['eval_batch_size'],
+        shuffle=False,
+        num_workers=2,
+        pin_memory=True
+    )
 
     net_g = Net(**config['model_params'])  # 생성자(generator) 모델 초기화
     logging.info(f"Model size: {utils.model_size(net_g)}M params")  # 모델 파라미터 수 로그
 
-    if is_multi_process:
-        net_g = net_g.cuda(rank)  # 분산 학습일 경우 지정된 GPU로 이동
-    else:
-        net_g = net_g.to(device=device)  # 단일 GPU 또는 CPU 사용
+    # if is_multi_process:
+    #     net_g = net_g.cuda(rank)  # 분산 학습일 경우 지정된 GPU로 이동
+    # else:
+    #     net_g = net_g.to(device=device)  # 단일 GPU 또는 CPU 사용
+
+    net_g = net_g.to(device=device)
 
     if config['discriminator'] == 'hfg':  # hfg 구조 선택 시
         from hfg_disc import ComboDisc, discriminator_loss, generator_loss, feature_loss
@@ -100,10 +144,12 @@ def training_runner(rank, world_size, config, training_dir):
         from discriminators import MultiPeriodDiscriminator, discriminator_loss, generator_loss, feature_loss
         net_d = MultiPeriodDiscriminator(periods=config['periods'])
     
-    if is_multi_process:
-        net_d = net_d.cuda(rank)  # 멀티 프로세스일 경우, 현재 rank에 해당하는 GPU로 판별자(net_d) 이동
-    else:
-        net_d = net_d.to(device=device)  # 싱글 프로세스일 경우 일반적인 device로 이동 (GPU 또는 CPU)
+    # if is_multi_process:
+    #     net_d = net_d.cuda(rank)  # 멀티 프로세스일 경우, 현재 rank에 해당하는 GPU로 판별자(net_d) 이동
+    # else:
+    #     net_d = net_d.to(device=device)  # 싱글 프로세스일 경우 일반적인 device로 이동 (GPU 또는 CPU)
+
+    net_d = net_d.to(device)
 
     optim_g = torch.optim.AdamW(
         net_g.parameters(),                     # 생성자(net_g)의 파라미터들에 대해
@@ -122,32 +168,55 @@ def training_runner(rank, world_size, config, training_dir):
     )
 
 
-    if is_multi_process:
-        net_g = DDP(net_g, device_ids=[rank])  # 생성자 모델을 분산 처리로 래핑
-        net_d = DDP(net_d, device_ids=[rank])  # 판별자 모델도 마찬가지
+    # if is_multi_process:
+    #     net_g = DDP(net_g, device_ids=[rank])  # 생성자 모델을 분산 처리로 래핑
+    #     net_d = DDP(net_d, device_ids=[rank])  # 판별자 모델도 마찬가지
+    
+#     net_g = DDP(net_g, device_ids=[rank])  # 생성자 모델을 분산 처리로 래핑
+#     net_d = DDP(net_d, device_ids=[rank])  # 판별자 모델도 마찬가지
+
 
     last_d_state = utils.latest_checkpoint_path(checkpoint_dir, "D_*.pth")  # 가장 최근의 판별자 체크포인트 경로 가져오기
     last_g_state = utils.latest_checkpoint_path(checkpoint_dir, "G_*.pth")  # 가장 최근의 생성자 체크포인트 경로 가져오기
 
+    # 기본값
+    lr = config['optim']['lr']
+    global_step = 0
+    epoch = 0
 
-    if last_d_state and last_g_state:  # 두 체크포인트가 모두 존재할 경우
-        net_d, optim_d, lr, epoch, step = utils.load_checkpoint(
-            last_d_state, net_d, optim_d)  # 판별자 체크포인트 로드
+    # Generator만 존재하는 경우
+    if last_g_state:
+        net_g, _, lr, epoch, step = load_checkpoint_partial(last_g_state, net_g, None)
+        global_step = step
+        logging.info("Loaded partial generator checkpoint from %s" % last_g_state)
 
-        net_g, optim_g, lr, epoch, step = utils.load_checkpoint(
-            last_g_state, net_g, optim_g)  # 생성자 체크포인트 로드
-
-        global_step = step  # 로드한 글로벌 스텝 수로 이어서 학습
-        logging.info("Loaded generator checkpoint from %s" % last_g_state)  # 로드 로그 출력
+    # Discriminator도 있으면 불러오기
+    if last_d_state:
+        net_d, optim_d, _, _, _ = utils.load_checkpoint(
+            last_d_state, net_d, optim_d)
         logging.info("Loaded discriminator checkpoint from %s" % last_d_state)
-        logging.info("Generator learning rates restored to:" +
-                    utils.format_lr_info(optim_g))  # 학습률 정보 출력
         logging.info("Discriminator learning rates restored to:" +
-                    utils.format_lr_info(optim_d))
-    else:  # 체크포인트가 없을 경우 학습 처음부터 시작
-        lr = config['optim']['lr']  # 초기 학습률 설정
-        global_step = 0             # 스텝 초기화
-        epoch = 0                   # 에폭 초기화
+                     utils.format_lr_info(optim_d))
+        
+#     if last_d_state and last_g_state:  # 두 체크포인트가 모두 존재할 경우
+#         net_d, optim_d, lr, epoch, step = utils.load_checkpoint(
+#             last_d_state, net_d, optim_d)  # 판별자 체크포인트 로드
+
+#         net_g, optim_g, lr, epoch, step = utils.load_checkpoint(
+#             last_g_state, net_g, optim_g)  # 생성자 체크포인트 로드
+
+#         global_step = step  # 로드한 글로벌 스텝 수로 이어서 학습
+#         logging.info("Loaded generator checkpoint from %s" % last_g_state)  # 로드 로그 출력
+#         logging.info("Loaded discriminator checkpoint from %s" % last_d_state)
+#         logging.info("Generator learning rates restored to:" +
+#                     utils.format_lr_info(optim_g))  # 학습률 정보 출력
+#         logging.info("Discriminator learning rates restored to:" +
+#                     utils.format_lr_info(optim_d))
+#     else:  # 체크포인트가 없을 경우 학습 처음부터 시작
+#         lr = config['optim']['lr']  # 초기 학습률 설정
+#         global_step = 0             # 스텝 초기화
+#         epoch = 0                   # 에폭 초기화
+    
     
     scheduler_g = torch.optim.lr_scheduler.ExponentialLR(
         optim_g, gamma=config['lr_sched']['lr_decay']  # 생성자 학습률 스케줄러 (지수 감소)
@@ -485,14 +554,22 @@ def train_model(gpus, config, training_dir):
     torch.backends.cudnn.deterministic = False  # 학습 속도를 위해 cudnn의 결정론적 모드를 끔
     torch.backends.cudnn.benchmark = False  # 입력 크기가 일정하지 않더라도 성능 최적화를 비활성화
 
-    mp.spawn(  # torch.multiprocessing.spawn: 멀티프로세싱 시작
-        training_runner,  # 실행할 함수 (GPU 별 학습 루프)
-        nprocs=len(gpus),  # 프로세스 수 = 사용 GPU 수
-        args=(  # training_runner에 넘겨줄 인자들
-            len(gpus),     # world_size (총 GPU 수)
-            config,        # 학습 설정 딕셔너리
-            training_dir   # 로그/체크포인트 저장 디렉토리
-        )
+    num_processes = 1
+
+    # mp.spawn(  # torch.multiprocessing.spawn: 멀티프로세싱 시작
+    #     training_runner,  # 실행할 함수 (GPU 별 학습 루프)
+    #     nprocs=len(gpus),  # 프로세스 수 = 사용 GPU 수
+    #     args=(  # training_runner에 넘겨줄 인자들
+    #         len(gpus),     # world_size (총 GPU 수)
+    #         config,        # 학습 설정 딕셔너리
+    #         training_dir   # 로그/체크포인트 저장 디렉토리
+    #     )
+    # )
+
+    mp.spawn(
+        training_runner,
+        nprocs=num_processes,
+        args=(num_processes, config, training_dir)
     )
 
     if PREV_CUDA_VISIBLE_DEVICES is None:
