@@ -22,6 +22,8 @@ import fairseq
 import argparse
 from fairseq.data.dictionary import Dictionary
 import torch.serialization
+from torch.utils.data.distributed import DistributedSampler
+
 
 torch.serialization.add_safe_globals([Dictionary]) #py보안 정책땜에 필요
 
@@ -52,55 +54,102 @@ def net_g_step(batch, net_g, device, fp16_run):
 
 
 def training_runner(rank, world_size, config, training_dir):
+    # 멀티 프로세싱용 초기화
+    dist.init_process_group(
+        backend="nccl", init_method="env://", rank=rank, world_size=world_size
+    )
+
     log_dir = os.path.join(training_dir, "logs")  # 로그 디렉토리 경로 설정
     checkpoint_dir = os.path.join(training_dir, "checkpoints")  # 체크포인트 저장 디렉토리 경로 설정
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"  # GPU 사용 가능 여부 확인
+    # device = "cuda" if torch.cuda.is_available() else "cpu"  # GPU 사용 가능 여부 확인
+    device = torch.device(f"cuda:0")
 
     is_multi_process = world_size > 1  # 분산 학습 여부
     is_main_process = rank == 0  # 현재 프로세스가 메인인지 여부
 
-    if is_main_process:
-        os.makedirs(log_dir, exist_ok=True)  # 로그 디렉토리 생성
-        os.makedirs(checkpoint_dir, exist_ok=True)  # 체크포인트 디렉토리 생성
-        writer = SummaryWriter(log_dir=log_dir)  # TensorBoard 로그 기록기 초기화
+    # if is_main_process:
+    #     os.makedirs(log_dir, exist_ok=True)  # 로그 디렉토리 생성
+    #     os.makedirs(checkpoint_dir, exist_ok=True)  # 체크포인트 디렉토리 생성
+    #     writer = SummaryWriter(log_dir=log_dir)  # TensorBoard 로그 기록기 초기화
+
+    if rank == 0:
+        logging.basicConfig(level=logging.INFO)
+        os.makedirs(log_dir, exist_ok=True)
+        os.makedirs(checkpoint_dir, exist_ok=True)
+        writer = SummaryWriter(log_dir=log_dir)
+    else:
+        writer = None
 
     # dist.init_process_group(
     #     backend="gloo", init_method="env://", rank=rank, world_size=world_size
     # )  # PyTorch 분산 학습 프로세스 그룹 초기화 (환경변수 방식 사용)
 
-    if world_size > 1:
-        dist.init_process_group(backend="gloo", init_method="env://", rank=rank, world_size=world_size)
+    # if world_size > 1:
+    #     dist.init_process_group(backend="gloo", init_method="env://", rank=rank, world_size=world_size)
 
-    if is_multi_process:
-        torch.cuda.set_device(rank)  # rank에 해당하는 GPU 사용 설정
+    # if is_multi_process:
+    #     torch.cuda.set_device(rank)  # rank에 해당하는 GPU 사용 설정
 
     torch.manual_seed(config['seed'])  # 랜덤 시드 고정
 
-    data_train = Dataset(**config['data'], dset='짱구')  # 학습용 데이터셋 생성
+    data_train = Dataset(**config['data'], dset='train')  # 학습용 데이터셋 생성
     data_val = Dataset(**config['data'], dset='val')  # 검증용 데이터셋
     data_dev = Dataset(**config['data'], dset='dev')  # 개발용(예측 확인용) 데이터셋
+
+    train_sampler = DistributedSampler(data_train, num_replicas=world_size, rank=rank, shuffle=True)
+    val_sampler = DistributedSampler(data_val, num_replicas=world_size, rank=rank, shuffle=False)
+    dev_sampler = DistributedSampler(data_dev, num_replicas=world_size, rank=rank, shuffle=False)
+
 
     for ds in [data_train, data_val, data_dev]:
         logging.info(f"Loaded dataset at {ds.dset} containing {len(ds)} elements")  # 로드된 데이터셋 정보 로그
 
-    train_loader = torch.utils.data.DataLoader(data_train,
-                                               batch_size=config['batch_size'],
-                                               shuffle=True)  # 학습용 데이터로더
+    # train_loader = torch.utils.data.DataLoader(data_train,
+    #                                            batch_size=config['batch_size'],
+    #                                            shuffle=True)  # 학습용 데이터로더
 
-    val_loader = torch.utils.data.DataLoader(data_val,
-                                             batch_size=config['eval_batch_size'])  # 검증용 데이터로더
+    # val_loader = torch.utils.data.DataLoader(data_val,
+    #                                          batch_size=config['eval_batch_size'])  # 검증용 데이터로더
 
-    dev_loader = torch.utils.data.DataLoader(data_dev,
-                                             batch_size=config['eval_batch_size'])  # 개발용 데이터로더
+    # dev_loader = torch.utils.data.DataLoader(data_dev,
+    #                                          batch_size=config['eval_batch_size'])  # 개발용 데이터로더
+
+    train_loader = torch.utils.data.DataLoader(
+        data_train,
+        batch_size=config['batch_size'],
+        sampler=train_sampler,
+        num_workers=0,
+        pin_memory=True
+    )
+
+    val_loader = torch.utils.data.DataLoader(
+        data_val,
+        batch_size=config['eval_batch_size'],
+        sampler=val_sampler,
+        num_workers=0,
+        pin_memory=True
+    )
+
+    dev_loader = torch.utils.data.DataLoader(
+        data_dev,
+        batch_size=config['eval_batch_size'],
+        sampler=dev_sampler,
+        num_workers=0,
+        pin_memory=True
+    )
+
+
 
     net_g = Net(**config['model_params'])  # 생성자(generator) 모델 초기화
     logging.info(f"Model size: {utils.model_size(net_g)}M params")  # 모델 파라미터 수 로그
 
-    if is_multi_process:
-        net_g = net_g.cuda(rank)  # 분산 학습일 경우 지정된 GPU로 이동
-    else:
-        net_g = net_g.to(device=device)  # 단일 GPU 또는 CPU 사용
+    # if is_multi_process:
+    #     net_g = net_g.cuda(rank)  # 분산 학습일 경우 지정된 GPU로 이동
+    # else:
+    #     net_g = net_g.to(device=device)  # 단일 GPU 또는 CPU 사용
+
+    net_g = net_g.to(device=device)
 
     if config['discriminator'] == 'hfg':  # hfg 구조 선택 시
         from hfg_disc import ComboDisc, discriminator_loss, generator_loss, feature_loss
@@ -109,10 +158,12 @@ def training_runner(rank, world_size, config, training_dir):
         from discriminators import MultiPeriodDiscriminator, discriminator_loss, generator_loss, feature_loss
         net_d = MultiPeriodDiscriminator(periods=config['periods'])
     
-    if is_multi_process:
-        net_d = net_d.cuda(rank)  # 멀티 프로세스일 경우, 현재 rank에 해당하는 GPU로 판별자(net_d) 이동
-    else:
-        net_d = net_d.to(device=device)  # 싱글 프로세스일 경우 일반적인 device로 이동 (GPU 또는 CPU)
+    # if is_multi_process:
+    #     net_d = net_d.cuda(rank)  # 멀티 프로세스일 경우, 현재 rank에 해당하는 GPU로 판별자(net_d) 이동
+    # else:
+    #     net_d = net_d.to(device=device)  # 싱글 프로세스일 경우 일반적인 device로 이동 (GPU 또는 CPU)
+
+    net_d = net_d.to(device)
 
     optim_g = torch.optim.AdamW(
         net_g.parameters(),                     # 생성자(net_g)의 파라미터들에 대해
@@ -131,9 +182,12 @@ def training_runner(rank, world_size, config, training_dir):
     )
 
 
-    if is_multi_process:
-        net_g = DDP(net_g, device_ids=[rank])  # 생성자 모델을 분산 처리로 래핑
-        net_d = DDP(net_d, device_ids=[rank])  # 판별자 모델도 마찬가지
+    # if is_multi_process:
+    #     net_g = DDP(net_g, device_ids=[rank])  # 생성자 모델을 분산 처리로 래핑
+    #     net_d = DDP(net_d, device_ids=[rank])  # 판별자 모델도 마찬가지
+    
+    net_g = DDP(net_g, device_ids=[rank])  # 생성자 모델을 분산 처리로 래핑
+    net_d = DDP(net_d, device_ids=[rank])  # 판별자 모델도 마찬가지
 
     last_d_state = utils.latest_checkpoint_path(checkpoint_dir, "D_*.pth")  # 가장 최근의 판별자 체크포인트 경로 가져오기
     last_g_state = utils.latest_checkpoint_path(checkpoint_dir, "G_*.pth")  # 가장 최근의 생성자 체크포인트 경로 가져오기
@@ -183,8 +237,9 @@ def training_runner(rank, world_size, config, training_dir):
     loss_mel_avg = utils.RunningAvg() # mel 스펙트로그램 손실의 이동 평균을 계산하기 위한 도우미 클래스
     loss_fairseq_avg = utils.RunningAvg()  # fairseq 기반 손실의 이동 평균 저장용 클래스
 
-    for epoch in range(epoch, 10000):  # 현재 에폭부터 시작해서 최대 10000 에폭까지 반복
+    for epoch in range(epoch, 5):  # 현재 에폭부터 시작해서 최대 10000 에폭까지 반복
         # train_loader.batch_sampler.set_epoch(epoch)  # (분산 학습 시) 데이터 셔플링을 위해 에폭마다 시드 설정, 현재는 주석 처리됨
+        train_sampler.set_epoch(epoch)
 
         net_g.train()  # 생성자 모델을 학습 모드로 전환
         net_d.train()  # 판별자 모델을 학습 모드로 전환
@@ -367,12 +422,21 @@ def training_runner(rank, world_size, config, training_dir):
 
                 logging.info("Testing...")  # 테스트 시작 로그
 
+                speaker_map = {
+                    0: "conan",
+                    1: "keroro",
+                    2: "jjanggu"
+                }
+
+
                 # 벤치마크 오디오들을 모델에 통과시켜 예측 결과 저장
                 for test_wav_name, test_wav in tqdm(test_wavs, total=len(test_wavs)):
-                    test_out = net_g(test_wav.unsqueeze(0).unsqueeze(0).to(device))  # [T] → [1, 1, T]로 reshape 후 모델에 입력
-                    audio_dict.update({
-                        f"test_audio/{test_wav_name}": test_out[0].data.cpu().numpy()  # 예측 결과를 audio_dict에 저장
-                    })
+                    for idx in range(3):  # 인덱스 0, 1, 2 전부 변환
+                        target_index = torch.tensor([idx], dtype=torch.long).to(device)
+                        test_out = net_g(test_wav.unsqueeze(0).unsqueeze(0).to(device), target_index=target_index)
+                        audio_dict.update({
+                            f"test_audio/{test_wav_name}_{speaker_map[idx]}": test_out[0].data.cpu().numpy()
+                        })
 
                 # dev 및 val 검증용 데이터셋을 사용해 성능 평가
                 for loader in [dev_loader, val_loader]:
@@ -482,17 +546,19 @@ def train_model(gpus, config, training_dir):
     deterministic = torch.backends.cudnn.deterministic  # 현재 cudnn의 deterministic 설정을 백업
     benchmark = torch.backends.cudnn.benchmark  # 현재 cudnn의 benchmark 설정을 백업
 
-    # PREV_CUDA_VISIBLE_DEVICES = os.environ.get("CUDA_VISIBLE_DEVICES", None)  # 기존 CUDA_VISIBLE_DEVICES 환경변수 저장
+    PREV_CUDA_VISIBLE_DEVICES = os.environ.get("CUDA_VISIBLE_DEVICES", None)  # 기존 CUDA_VISIBLE_DEVICES 환경변수 저장
 
-    # if PREV_CUDA_VISIBLE_DEVICES is None:
-    #     PREV_CUDA_VISIBLE_DEVICES = None  # 이전 설정이 없었다면 None으로 유지
-    #     os.environ["CUDA_VISIBLE_DEVICES"] = ",".join(
-    #         [str(gpu) for gpu in gpus])  # 학습에 사용할 GPU 목록을 환경변수로 설정 (예: "0,1,2")
-    # else:
-    #     os.environ["CUDA_VISIBLE_DEVICES"] = PREV_CUDA_VISIBLE_DEVICES  # 기존에 설정된 값이 있으면 그대로 유지
+    if PREV_CUDA_VISIBLE_DEVICES is None:
+        PREV_CUDA_VISIBLE_DEVICES = None  # 이전 설정이 없었다면 None으로 유지
+        os.environ["CUDA_VISIBLE_DEVICES"] = ",".join(
+            [str(gpu) for gpu in gpus])  # 학습에 사용할 GPU 목록을 환경변수로 설정 (예: "0,1,2")
+    else:
+        os.environ["CUDA_VISIBLE_DEVICES"] = PREV_CUDA_VISIBLE_DEVICES  # 기존에 설정된 값이 있으면 그대로 유지
 
     torch.backends.cudnn.deterministic = False  # 학습 속도를 위해 cudnn의 결정론적 모드를 끔
     torch.backends.cudnn.benchmark = False  # 입력 크기가 일정하지 않더라도 성능 최적화를 비활성화
+
+    num_processes = 1
 
     # mp.spawn(  # torch.multiprocessing.spawn: 멀티프로세싱 시작
     #     training_runner,  # 실행할 함수 (GPU 별 학습 루프)
@@ -503,16 +569,22 @@ def train_model(gpus, config, training_dir):
     #         training_dir   # 로그/체크포인트 저장 디렉토리
     #     )
     # )
-        # 멀티 프로세싱 대신 단일 프로세스로 바로 실행
-    training_runner(
-        rank=0,            # GPU ID 0 사용
-        world_size=1,      # 전체 GPU 수 1개로 간주
-        config=config,
-        training_dir=training_dir
-    )
 
-    # if PREV_CUDA_VISIBLE_DEVICES is None:
-    #     del os.environ["CUDA_VISIBLE_DEVICES"]  # 학습 후, 임시로 설정했던 환경변수 삭제
+    mp.spawn(
+        training_runner,
+        nprocs=num_processes,
+        args=(num_processes, config, training_dir)
+    )
+        # 멀티 프로세싱 대신 단일 프로세스로 바로 실행
+    # training_runner(
+    #     rank=0,            # GPU ID 0 사용
+    #     world_size=1,      # 전체 GPU 수 1개로 간주
+    #     config=config,
+    #     training_dir=training_dir
+    # )
+
+    if PREV_CUDA_VISIBLE_DEVICES is None:
+        del os.environ["CUDA_VISIBLE_DEVICES"]  # 학습 후, 임시로 설정했던 환경변수 삭제
 
     torch.backends.cudnn.deterministic = deterministic  # 이전 cudnn 설정 복원
     torch.backends.cudnn.benchmark = benchmark  # 이전 cudnn 설정 복원
